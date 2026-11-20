@@ -8,4 +8,6 @@ This is a crypto scalping signal dashboard in Python.
 - Add clear comments; the owner is not an expert programmer.
 - Handle API and network errors gracefully; the dashboard must never crash.
 - Always run commands inside the venv (Python 3.13).
+- Entry file is streamlit_app.py (not app.py — Vercel reserves that name for Python serverless).
+- Deploy the dashboard on Streamlit Community Cloud; Vercel is only a static landing page.
 - Only build what is asked in the current prompt; do not jump ahead to later phases.

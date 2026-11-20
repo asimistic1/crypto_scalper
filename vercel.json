@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo \"No install needed for static landing page\"",
+  "buildCommand": "echo \"Streamlit dashboard is not built on Vercel\"",
+  "outputDirectory": "public"
+}

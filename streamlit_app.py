@@ -1,6 +1,9 @@
 """
 Crypto Scalper — Phase 1: live chart dashboard (Streamlit).
-Run with: streamlit run app.py  (inside activated venv)
+Run with: streamlit run streamlit_app.py  (inside activated venv)
+
+Note: Streamlit cannot run on Vercel serverless Python. Use Streamlit Community Cloud
+or run locally. Vercel serves only the static page in public/.
 """
 
 from __future__ import annotations

@@ -1,0 +1,7 @@
+# Streamlit settings (local + Community Cloud).
+[theme]
+base = "dark"
+
+[server]
+# Safer default when deploying to Cloud; local dev still works.
+headless = true

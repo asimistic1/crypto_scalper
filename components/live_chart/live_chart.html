@@ -273,25 +273,19 @@
 
         function renderEmaLegend(candleIdx) {
           const box = el("ema-legend");
+          box.replaceChildren();
           if (!candles.length || candleIdx == null || candleIdx < 0) {
-            box.innerHTML = "";
             return;
           }
-          const parts = [];
           [9, 21, 50, 200].forEach((p) => {
             const v = emaAtIndex(candleIdx, p);
             if (v == null) return;
-            parts.push(
-              '<span class="ema-item" style="color:' +
-                EMA_COLORS[p] +
-                '">EMA ' +
-                p +
-                ": " +
-                fmtPrice(v) +
-                "</span>"
-            );
+            const span = document.createElement("span");
+            span.className = "ema-item";
+            span.style.color = EMA_COLORS[p];
+            span.textContent = "EMA " + p + ": " + fmtPrice(v);
+            box.appendChild(span);
           });
-          box.innerHTML = parts.join("");
         }
 
         function refreshEmaLines() {
@@ -625,7 +619,7 @@
             }
           });
           leg.style.display = "block";
-          leg.innerHTML =
+          leg.textContent =
             fmtTime(param.time) +
             " O " + fmtPrice(c.open) +
             " H " + fmtPrice(c.high) +

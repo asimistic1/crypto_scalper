@@ -1,0 +1,13 @@
+{
+  "_instructions": [
+    "Paste TradingView-exported values for closed BTCUSDT.P perpetual candles (Binance data).",
+    "Use the SAME closed bar timestamps as in this file's 'bars' array.",
+    "Indicators on TradingView: EMA 9/21/50/200 (close), RSI 14, ATR 14, chart 15m.",
+    "When 'bars' is empty, tests that depend on this file are SKIPPED.",
+    "Example bar entry:",
+    "  { \"time_utc\": \"2025-01-15T12:00:00Z\", \"close\": 61754.4, \"ema_9\": 61743.0, \"ema_21\": 61777.3, \"ema_50\": 61949.2, \"ema_200\": 62850.7, \"rsi_14\": 48.2, \"atr_14\": 125.5 }"
+  ],
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "bars": []
+}

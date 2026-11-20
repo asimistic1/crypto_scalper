@@ -147,9 +147,6 @@ def build_zones(
                 cur = [p]
         clusters.append(cur)
 
-        ref_time = last_bar_time or (as_of if as_of else pivots[-1].pivot_time)
-        ref = _aware(ref_time)
-
         for cluster in clusters:
             prices = [c.price for c in cluster]
             low_p, high_p = min(prices), max(prices)

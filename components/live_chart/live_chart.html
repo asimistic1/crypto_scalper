@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Chart</title>
+    <!-- TradingView Lightweight Charts v5.0.7 (pinned) -->
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.7/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        background: #161a1e;
+        color: #eaecef;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+      #header {
+        padding: 8px 12px;
+        border-bottom: 1px solid #2b3139;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 16px;
+        font-size: 13px;
+      }
+      #symbol { font-weight: 600; font-size: 15px; }
+      #last-price { font-size: 20px; font-weight: 700; min-width: 120px; }
+      #last-price.flash-up { color: #0ecb81; }
+      #last-price.flash-down { color: #f6465d; }
+      .stat label { color: #848e9c; font-size: 11px; display: block; }
+      .stat span { font-variant-numeric: tabular-nums; }
+      #status-dot {
+        width: 10px; height: 10px; border-radius: 50%;
+        background: #f6465d;
+        display: inline-block;
+        margin-right: 6px;
+      }
+      #status-dot.live { background: #0ecb81; }
+      #status-dot.reconnecting { background: #f0b90b; }
+      #legend {
+        position: absolute;
+        top: 62px;
+        left: 12px;
+        z-index: 5;
+        font-size: 11px;
+        color: #b7bdc6;
+        pointer-events: none;
+        background: rgba(22, 26, 30, 0.85);
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: none;
+      }
+      #indicators {
+        margin-left: auto;
+        display: flex;
+        gap: 12px;
+        font-size: 12px;
+        color: #b7bdc6;
+      }
+      #chart-wrap { position: relative; width: 100%; }
+      #chart-container { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="header">
+      <span id="status-dot"></span>
+      <span id="conn-text">Connecting…</span>
+      <span id="latency"></span>
+      <span id="symbol"></span>
+      <span id="last-price">—</span>
+      <div class="stat"><label>24h Change</label><span id="chg">—</span></div>
+      <div class="stat"><label>24h High</label><span id="hi">—</span></div>
+      <div class="stat"><label>24h Low</label><span id="lo">—</span></div>
+      <div class="stat"><label>24h Vol</label><span id="vol">—</span></div>
+      <div id="indicators">
+        <span>RSI(14): <b id="rsi">—</b></span>
+        <span>ATR(14): <b id="atr">—</b></span>
+      </div>
+    </div>
+    <div id="legend"></div>
+    <div id="chart-wrap"><div id="chart-container"></div></div>
+
+    <script>
+      /*__INJECT_CONFIG__*/
+      (function () {
+        const CFG = window.__CHART_CONFIG__ || {};
+        const {
+          createChart,
+          CandlestickSeries,
+          HistogramSeries,
+          LineSeries,
+          CrosshairMode,
+        } = LightweightCharts;
+
+        const UP = "#0ECB81";
+        const DOWN = "#F6465D";
+        const EMA_COLORS = { 9: "#FFEB3B", 21: "#FF9800", 50: "#2196F3", 200: "#9C27B0" };
+        const PK_TZ = "Asia/Karachi";
+        const BACKOFF = [1000, 2000, 5000, 10000, 30000];
+
+        let ws = null;
+        let backoffIx = 0;
+        let reconnectTimer = null;
+        let candles = [];
+        let precision = { minMove: 0.1, precision: 1 };
+        let lastAggPrice = null;
+        let currentPriceLine = null;
+
+        const el = (id) => document.getElementById(id);
+
+        function fmtTime(utcSec) {
+          return new Date(utcSec * 1000).toLocaleString("en-GB", {
+            timeZone: PK_TZ,
+            day: "2-digit",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+
+        function fmtNum(n, prec) {
+          if (n == null || isNaN(n)) return "—";
+          return Number(n).toLocaleString(undefined, {
+            minimumFractionDigits: prec,
+            maximumFractionDigits: prec,
+          });
+        }
+
+        function fmtVol(n) {
+          if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+          if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+          if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+          return String(n);
+        }
+
+        function setStatus(mode, text) {
+          el("status-dot").className = mode;
+          el("conn-text").textContent = text;
+        }
+
+        function flashPrice(price) {
+          const p = el("last-price");
+          p.textContent = fmtNum(price, precision.precision);
+          if (lastAggPrice != null) {
+            p.classList.remove("flash-up", "flash-down");
+            void p.offsetWidth;
+            if (price > lastAggPrice) p.classList.add("flash-up");
+            else if (price < lastAggPrice) p.classList.add("flash-down");
+          }
+          lastAggPrice = price;
+        }
+
+        function calcEMA(closes, period) {
+          const out = new Array(closes.length).fill(null);
+          if (closes.length < period) return out;
+          let sum = 0;
+          for (let i = 0; i < period; i++) sum += closes[i];
+          let prev = sum / period;
+          out[period - 1] = prev;
+          const k = 2 / (period + 1);
+          for (let i = period; i < closes.length; i++) {
+            prev = closes[i] * k + prev * (1 - k);
+            out[i] = prev;
+          }
+          return out;
+        }
+
+        function calcRSI(closes, period) {
+          if (closes.length < period + 1) return null;
+          let gains = 0, losses = 0;
+          for (let i = closes.length - period; i < closes.length; i++) {
+            const d = closes[i] - closes[i - 1];
+            if (d >= 0) gains += d;
+            else losses -= d;
+          }
+          const avgG = gains / period;
+          const avgL = losses / period;
+          if (avgL === 0) return 100;
+          const rs = avgG / avgL;
+          return 100 - 100 / (1 + rs);
+        }
+
+        function calcATR(data, period) {
+          if (data.length < period + 1) return null;
+          const trs = [];
+          for (let i = 1; i < data.length; i++) {
+            const h = data[i].high, l = data[i].low, pc = data[i - 1].close;
+            trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+          }
+          const slice = trs.slice(-period);
+          return slice.reduce((a, b) => a + b, 0) / period;
+        }
+
+        function updateIndicators() {
+          const closes = candles.map((c) => c.close);
+          const rsi = calcRSI(closes, 14);
+          const atr = calcATR(candles, 14);
+          el("rsi").textContent = rsi != null ? rsi.toFixed(2) : "—";
+          el("atr").textContent = atr != null ? atr.toFixed(2) : "—";
+        }
+
+        function emaSeriesData(period) {
+          const closes = candles.map((c) => c.close);
+          const ema = calcEMA(closes, period);
+          const data = [];
+          for (let i = 0; i < candles.length; i++) {
+            if (ema[i] != null) data.push({ time: candles[i].time, value: ema[i] });
+          }
+          return data;
+        }
+
+        function refreshEmaLines() {
+          [9, 21, 50, 200].forEach((p) => {
+            emaLineSeries[p].setData(emaSeriesData(p));
+          });
+        }
+
+        const container = el("chart-container");
+        container.style.height = (CFG.height || 750) + "px";
+
+        const chart = createChart(container, {
+          layout: {
+            background: { color: "#161A1E" },
+            textColor: "#b7bdc6",
+            attributionLogo: true,
+          },
+          grid: { vertLines: { color: "#22262a" }, horzLines: { color: "#22262a" } },
+          crosshair: { mode: CrosshairMode.Normal },
+          localization: {
+            timeFormatter: (t) => fmtTime(t),
+          },
+          timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            tickMarkFormatter: (t) => fmtTime(t),
+          },
+          rightPriceScale: { borderColor: "#2b3139" },
+        });
+
+        const candleSeries = chart.addSeries(CandlestickSeries, {
+          upColor: UP,
+          downColor: DOWN,
+          borderUpColor: UP,
+          borderDownColor: DOWN,
+          wickUpColor: UP,
+          wickDownColor: DOWN,
+          priceFormat: precision,
+        });
+
+        const volumeSeries = chart.addSeries(HistogramSeries, {
+          priceFormat: { type: "volume" },
+          priceScaleId: "volume",
+        });
+        chart.priceScale("volume").applyOptions({
+          scaleMargins: { top: 0.82, bottom: 0 },
+        });
+        chart.priceScale("right").applyOptions({
+          scaleMargins: { top: 0.05, bottom: 0.22 },
+        });
+
+        const emaLineSeries = {};
+        [9, 21, 50, 200].forEach((p) => {
+          emaLineSeries[p] = chart.addSeries(LineSeries, {
+            color: EMA_COLORS[p],
+            lineWidth: 1,
+            title: "EMA " + p,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+        });
+
+        function applyOverlays() {
+          const ov = CFG.overlays || {};
+          (ov.lines || []).forEach((line) => {
+            let price = line.price;
+            if (price == null && candles.length) price = candles[candles.length - 1].close * 0.998;
+            if (price == null) return;
+            candleSeries.createPriceLine({
+              price: price,
+              color: line.color || "#2962FF",
+              title: line.title || "",
+              lineStyle: line.style === "dashed" ? 2 : 0,
+            });
+          });
+          (ov.zones || []).forEach((z) => {
+            if (z.from == null || z.to == null) return;
+            candleSeries.createPriceLine({
+              price: z.from,
+              color: z.color || "rgba(14,203,129,0.6)",
+              lineStyle: 2,
+              title: z.label || "Support",
+            });
+            candleSeries.createPriceLine({
+              price: z.to,
+              color: z.color || "rgba(14,203,129,0.6)",
+              lineStyle: 2,
+              title: "Zone top",
+            });
+          });
+          const markers = (ov.markers || []).map((m) => ({
+            time: m.time,
+            position: m.position || "belowBar",
+            color: m.color || UP,
+            shape: m.shape || "circle",
+            text: m.text || "",
+          }));
+          if (markers.length) candleSeries.setMarkers(markers);
+        }
+
+        function setCandles(data, replace) {
+          candles = replace ? data.slice() : mergeCandles(candles, data);
+          candleSeries.setData(candles);
+          volumeSeries.setData(
+            candles.map((c) => ({
+              time: c.time,
+              value: c.volume,
+              color: c.close >= c.open ? "rgba(14,203,129,0.5)" : "rgba(246,70,93,0.5)",
+            }))
+          );
+          refreshEmaLines();
+          updateIndicators();
+        }
+
+        function mergeCandles(existing, incoming) {
+          const map = new Map(existing.map((c) => [c.time, c]));
+          incoming.forEach((c) => map.set(c.time, c));
+          return Array.from(map.values()).sort((a, b) => a.time - b.time);
+        }
+
+        function klineToCandle(k) {
+          return {
+            time: Math.floor(k.t / 1000),
+            open: +k.o,
+            high: +k.h,
+            low: +k.l,
+            close: +k.c,
+            volume: +k.v,
+          };
+        }
+
+        function onKline(k) {
+          const c = klineToCandle(k);
+          if (!candles.length) {
+            setCandles([c], true);
+            return;
+          }
+          const last = candles[candles.length - 1];
+          if (c.time === last.time) {
+            candles[candles.length - 1] = c;
+          } else if (c.time > last.time) {
+            candles.push(c);
+          } else {
+            const idx = candles.findIndex((x) => x.time === c.time);
+            if (idx >= 0) candles[idx] = c;
+          }
+          candleSeries.update(candles[candles.length - 1]);
+          const lastC = candles[candles.length - 1];
+          volumeSeries.update({
+            time: lastC.time,
+            value: lastC.volume,
+            color: lastC.close >= lastC.open ? "rgba(14,203,129,0.5)" : "rgba(246,70,93,0.5)",
+          });
+          refreshEmaLines();
+          updateIndicators();
+        }
+
+        function updatePriceLine(price) {
+          if (currentPriceLine) {
+            candleSeries.removePriceLine(currentPriceLine);
+          }
+          currentPriceLine = candleSeries.createPriceLine({
+            price: price,
+            color: "#848E9C",
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: "",
+          });
+        }
+
+        async function fetchPrecision() {
+          try {
+            const r = await fetch("https://fapi.binance.com/fapi/v1/exchangeInfo");
+            const j = await r.json();
+            const sym = j.symbols.find((s) => s.symbol === CFG.restSymbol);
+            if (!sym) return;
+            const pf = sym.pricePrecision;
+            const tick = sym.filters.find((f) => f.filterType === "PRICE_FILTER");
+            const minMove = tick ? parseFloat(tick.tickSize) : Math.pow(10, -pf);
+            precision = {
+              minMove: minMove,
+              precision: pf,
+            };
+            candleSeries.applyOptions({ priceFormat: precision });
+            chart.applyOptions({});
+          } catch (e) {
+            console.warn("exchangeInfo", e);
+          }
+        }
+
+        async function fetchHistory(limit) {
+          const url =
+            "https://fapi.binance.com/fapi/v1/klines?symbol=" +
+            CFG.restSymbol +
+            "&interval=" +
+            CFG.timeframe +
+            "&limit=" +
+            limit;
+          try {
+            const r = await fetch(url);
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const raw = await r.json();
+            const data = raw.map((row) => ({
+              time: Math.floor(row[0] / 1000),
+              open: +row[1],
+              high: +row[2],
+              low: +row[3],
+              close: +row[4],
+              volume: +row[5],
+            }));
+            setCandles(data, true);
+            return true;
+          } catch (e) {
+            console.warn("browser klines failed", e);
+            if (CFG.fallbackCandles && CFG.fallbackCandles.length) {
+              setCandles(CFG.fallbackCandles, true);
+              return true;
+            }
+            return false;
+          }
+        }
+
+        function wsUrl() {
+          const s = CFG.wsSymbol;
+          const tf = CFG.timeframe;
+          const streams = [s + "@kline_" + tf, s + "@aggTrade", s + "@ticker"].join("/");
+          return "wss://fstream.binance.com/market/stream?streams=" + streams;
+        }
+
+        function closeWs() {
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+          }
+          if (ws) {
+            ws.onclose = null;
+            ws.close();
+            ws = null;
+          }
+        }
+
+        function scheduleReconnect() {
+          setStatus("reconnecting", "Reconnecting…");
+          const delay = BACKOFF[Math.min(backoffIx, BACKOFF.length - 1)];
+          backoffIx++;
+          reconnectTimer = setTimeout(async () => {
+            await fetchHistory(100);
+            connectWs();
+          }, delay);
+        }
+
+        function connectWs() {
+          closeWs();
+          setStatus("reconnecting", "Connecting…");
+          const url = wsUrl();
+          ws = new WebSocket(url);
+          ws.onopen = () => {
+            backoffIx = 0;
+            setStatus("live", "Live");
+          };
+          ws.onmessage = (ev) => {
+            let msg;
+            try {
+              msg = JSON.parse(ev.data);
+            } catch {
+              return;
+            }
+            const stream = msg.stream || "";
+            const d = msg.data;
+            if (stream.endsWith("@aggTrade")) {
+              const price = +d.p;
+              flashPrice(price);
+              updatePriceLine(price);
+              const lat = Date.now() - d.E;
+              el("latency").textContent = "Latency: " + lat + " ms";
+            } else if (stream.includes("@kline_")) {
+              if (d && d.k) onKline(d.k);
+            } else if (stream.endsWith("@ticker")) {
+              const last = +d.c;
+              flashPrice(last);
+              el("chg").textContent = (+d.P).toFixed(2) + "%";
+              el("chg").style.color = +d.P >= 0 ? UP : DOWN;
+              el("hi").textContent = fmtNum(+d.h, precision.precision);
+              el("lo").textContent = fmtNum(+d.l, precision.precision);
+              el("vol").textContent = fmtVol(+d.q);
+            }
+          };
+          ws.onerror = () => setStatus("", "Error");
+          ws.onclose = () => scheduleReconnect();
+        }
+
+        chart.subscribeCrosshairMove((param) => {
+          const leg = el("legend");
+          if (!param.time || !param.seriesData.size) {
+            leg.style.display = "none";
+            return;
+          }
+          const c = param.seriesData.get(candleSeries);
+          const v = param.seriesData.get(volumeSeries);
+          if (!c) {
+            leg.style.display = "none";
+            return;
+          }
+          leg.style.display = "block";
+          leg.innerHTML =
+            fmtTime(param.time) +
+            " O " + fmtNum(c.open, precision.precision) +
+            " H " + fmtNum(c.high, precision.precision) +
+            " L " + fmtNum(c.low, precision.precision) +
+            " C " + fmtNum(c.close, precision.precision) +
+            (v ? " Vol " + fmtVol(v.value) : "");
+        });
+
+        new ResizeObserver(() => {
+          const w = container.clientWidth;
+          if (w > 0) chart.applyOptions({ width: w, height: CFG.height || 750 });
+        }).observe(container);
+
+        async function init() {
+          el("symbol").textContent = CFG.displaySymbol + " · " + CFG.timeframe;
+          await fetchPrecision();
+          const ok = await fetchHistory(CFG.historyLimit || 500);
+          if (!ok) setStatus("", "No history");
+          applyOverlays();
+          if (CFG.streamingEnabled !== false) connectWs();
+          else setStatus("", "Paused");
+        }
+
+        window.addEventListener("beforeunload", closeWs);
+        init();
+      })();
+    </script>
+  </body>
+</html>

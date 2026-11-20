@@ -1,1 +1,326 @@
-# Placeholder - Phase 2: support and resistance level detection.
+"""
+Market structure: confirmed swings, S/R zones, and auxiliary levels.
+
+Pure analysis — no network calls. Respects as_of to avoid look-ahead.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+from core.config import SR_MAX_ZONES_EACH_SIDE, SR_ZONE_TOLERANCE_ATR, SWING_LEFT, SWING_RIGHT, ZONE_RECENCY_HALF_LIFE_CANDLES
+from core.models import Swing, Zone
+
+
+def _row_time(series_time: pd.Series, idx: int) -> datetime:
+    ts = series_time.iloc[idx]
+    if isinstance(ts, pd.Timestamp):
+        return ts.to_pydatetime()
+    return pd.Timestamp(ts).to_pydatetime()
+
+
+def _row_confirmed_time(df: pd.DataFrame, idx: int) -> datetime:
+    if "close_time" in df.columns:
+        cts = df["close_time"].iloc[idx]
+        if pd.notna(cts):
+            if isinstance(cts, (int, np.integer)):
+                return pd.to_datetime(int(cts), unit="ms", utc=True).to_pydatetime()
+            return pd.Timestamp(cts).to_pydatetime()
+    return _row_time(df["time"], idx)
+
+
+def find_swings(
+    df: pd.DataFrame,
+    left: int = SWING_LEFT,
+    right: int = SWING_RIGHT,
+) -> list[Swing]:
+    """
+  Vectorized pivot detection. A pivot at index i is only known after bar i+right closes
+  (confirmed_time on that bar).
+    """
+    required = {"time", "high", "low"}
+    if not required.issubset(df.columns):
+        raise ValueError(f"find_swings needs columns {required}")
+
+    n = len(df)
+    if n < left + right + 1:
+        return []
+
+    high = df["high"].to_numpy(dtype=float)
+    low = df["low"].to_numpy(dtype=float)
+
+    w = left + right + 1
+    win_h = np.lib.stride_tricks.sliding_window_view(high, w)
+    win_l = np.lib.stride_tricks.sliding_window_view(low, w)
+
+    # Window k starts at pivot_index - left → pivot at pivot_index = k + left
+    pivot_indices = np.arange(left, n - right)
+    win_rows = pivot_indices - left
+    center = left
+
+    is_high = win_h[win_rows, center] == win_h[win_rows].max(axis=1)
+    is_low = win_l[win_rows, center] == win_l[win_rows].min(axis=1)
+
+    swings: list[Swing] = []
+    for j, pi in enumerate(pivot_indices):
+        conf_idx = pi + right
+        if is_high[j]:
+            swings.append(
+                Swing(
+                    pivot_time=_row_time(df["time"], pi),
+                    confirmed_time=_row_confirmed_time(df, conf_idx),
+                    price=float(high[pi]),
+                    kind="high",
+                )
+            )
+        if is_low[j]:
+            swings.append(
+                Swing(
+                    pivot_time=_row_time(df["time"], pi),
+                    confirmed_time=_row_confirmed_time(df, conf_idx),
+                    price=float(low[pi]),
+                    kind="low",
+                )
+            )
+
+    swings.sort(key=lambda s: (s.pivot_time, s.kind))
+    return swings
+
+
+def swings_confirmed_as_of(swings: Sequence[Swing], as_of: datetime) -> list[Swing]:
+    """Keep only swings that are fully confirmed at analysis time."""
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    return [s for s in swings if _aware(s.confirmed_time) <= as_of]
+
+
+def _aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _decay_weight(candles_ago: float, half_life: float) -> float:
+    if half_life <= 0:
+        return 1.0
+    return 0.5 ** (candles_ago / half_life)
+
+
+def build_zones(
+    swings: Sequence[Swing],
+    atr: float,
+    tolerance_atr: float = SR_ZONE_TOLERANCE_ATR,
+    as_of: datetime | None = None,
+    last_bar_time: datetime | None = None,
+    half_life: float = ZONE_RECENCY_HALF_LIFE_CANDLES,
+) -> list[Zone]:
+    """
+    Cluster pivot prices into zones (support from lows, resistance from highs).
+    strength = touch count weighted by recency + flip bonus when role changes.
+    """
+    if atr <= 0 or not swings:
+        return []
+
+    tol = tolerance_atr * atr
+    by_kind: dict[str, list[Swing]] = {"high": [], "low": []}
+    for s in swings:
+        by_kind[s.kind].append(s)
+
+    zones: list[Zone] = []
+    for kind, role_base in (("low", "support"), ("high", "resistance")):
+        pivots = sorted(by_kind[kind], key=lambda s: s.price)
+        if not pivots:
+            continue
+
+        clusters: list[list[Swing]] = []
+        cur: list[Swing] = [pivots[0]]
+        for p in pivots[1:]:
+            cluster_mid = float(np.mean([x.price for x in cur]))
+            if abs(p.price - cluster_mid) <= tol:
+                cur.append(p)
+            else:
+                clusters.append(cur)
+                cur = [p]
+        clusters.append(cur)
+
+        ref_time = last_bar_time or (as_of if as_of else pivots[-1].pivot_time)
+        ref = _aware(ref_time)
+
+        for cluster in clusters:
+            prices = [c.price for c in cluster]
+            low_p, high_p = min(prices), max(prices)
+            mid = float(np.mean(prices))
+            touches = len(cluster)
+            last_touch = max(cluster, key=lambda s: s.pivot_time).pivot_time
+
+            ordered = sorted(cluster, key=lambda s: s.pivot_time)
+            n_cl = len(ordered)
+            weighted = sum(_decay_weight(n_cl - 1 - r, half_life) for r in range(n_cl))
+            flip_bonus = 0.0
+
+            # Role flip: if both highs and lows touched similar band → weakened role flip signal
+            opposite = "high" if kind == "low" else "low"
+            for s in by_kind[opposite]:
+                if low_p - tol <= s.price <= high_p + tol:
+                    flip_bonus += 0.35
+                    break
+
+            strength = weighted + flip_bonus
+            zones.append(
+                Zone(
+                    price_low=low_p,
+                    price_high=high_p,
+                    mid=mid,
+                    touches=touches,
+                    last_touch_time=_aware(last_touch),
+                    strength=float(strength),
+                    role=role_base,
+                )
+            )
+
+    zones.sort(key=lambda z: z.mid)
+    return zones
+
+
+def previous_utc_day_hl(df_1d: pd.DataFrame, as_of: datetime) -> tuple[float | None, float | None]:
+    """High/low of the last fully closed UTC daily candle at as_of."""
+    if df_1d.empty or "time" not in df_1d.columns:
+        return None, None
+    as_of = _aware(as_of)
+    work = df_1d.copy()
+    if "close_time" in work.columns:
+        ct = work["close_time"]
+        if pd.api.types.is_integer_dtype(ct):
+            mask = pd.to_datetime(ct, unit="ms", utc=True) <= as_of
+        else:
+            mask = pd.to_datetime(ct, utc=True) <= as_of
+        work = work.loc[mask]
+    else:
+        work = work.loc[pd.to_datetime(work["time"], utc=True) <= as_of]
+    if work.empty:
+        return None, None
+    row = work.iloc[-1]
+    return float(row["high"]), float(row["low"])
+
+
+def current_daily_vwap(df: pd.DataFrame, as_of: datetime) -> float | None:
+    """VWAP for the UTC day containing as_of, using only bars with time <= as_of."""
+    if "vwap_daily" not in df.columns or df.empty:
+        return None
+    as_of = _aware(as_of)
+    times = pd.to_datetime(df["time"], utc=True)
+    mask = times <= as_of
+    if not mask.any():
+        return None
+    day = as_of.date()
+    day_mask = mask & (times.dt.date == day)
+    if not day_mask.any():
+        return None
+    v = df.loc[day_mask, "vwap_daily"].iloc[-1]
+    return float(v) if pd.notna(v) else None
+
+
+def extra_levels(
+    df_ltf: pd.DataFrame,
+    df_1d: pd.DataFrame | None,
+    as_of: datetime,
+    atr: float,
+) -> list[Zone]:
+    """Synthetic zones for prior day H/L and current session VWAP."""
+    zones: list[Zone] = []
+    band = max(atr * 0.05, 1e-8)
+
+    if df_1d is not None:
+        d_hi, d_lo = previous_utc_day_hl(df_1d, as_of)
+        if d_hi is not None:
+            zones.append(
+                Zone(
+                    price_low=d_hi - band,
+                    price_high=d_hi + band,
+                    mid=d_hi,
+                    touches=1,
+                    last_touch_time=as_of,
+                    strength=1.2,
+                    role="resistance",
+                )
+            )
+        if d_lo is not None:
+            zones.append(
+                Zone(
+                    price_low=d_lo - band,
+                    price_high=d_lo + band,
+                    mid=d_lo,
+                    touches=1,
+                    last_touch_time=as_of,
+                    strength=1.2,
+                    role="support",
+                )
+            )
+
+    vwap = current_daily_vwap(df_ltf, as_of)
+    if vwap is not None:
+        zones.append(
+            Zone(
+                price_low=vwap - band,
+                price_high=vwap + band,
+                mid=vwap,
+                touches=1,
+                last_touch_time=as_of,
+                strength=1.0,
+                role="support",
+            )
+        )
+    return zones
+
+
+def nearest_zones(
+    zones: Sequence[Zone],
+    price: float,
+    n: int = SR_MAX_ZONES_EACH_SIDE,
+) -> tuple[list[Zone], list[Zone]]:
+    """Up to n support zones below price and resistance zones above."""
+    below = [z for z in zones if z.mid <= price]
+    above = [z for z in zones if z.mid > price]
+    below.sort(key=lambda z: price - z.mid)
+    above.sort(key=lambda z: z.mid - price)
+    return below[:n], above[:n]
+
+
+def structure_for_symbol(
+    df: pd.DataFrame,
+    as_of: datetime,
+    atr: float,
+    df_1d: pd.DataFrame | None = None,
+) -> tuple[list[Swing], list[Zone]]:
+    """Convenience: swings confirmed at as_of + zones (+ extras)."""
+    all_swings = find_swings(df)
+    swings = swings_confirmed_as_of(all_swings, as_of)
+    if not swings:
+        zones = extra_levels(df, df_1d, as_of, atr) if df_1d is not None or "vwap_daily" in df.columns else []
+        return [], zones
+
+    last_idx = _last_index_at_or_before(df, as_of)
+    last_bar_time = _row_time(df["time"], last_idx) if last_idx is not None else as_of
+    zones = build_zones(swings, atr, as_of=as_of, last_bar_time=last_bar_time)
+    zones = sorted(zones + extra_levels(df, df_1d, as_of, atr), key=lambda z: z.mid)
+    return swings, zones
+
+
+def _last_index_at_or_before(df: pd.DataFrame, as_of: datetime) -> int | None:
+    as_of = _aware(as_of)
+    if "close_time" in df.columns:
+        ct = df["close_time"]
+        if pd.api.types.is_integer_dtype(ct):
+            times = pd.to_datetime(ct, unit="ms", utc=True)
+        else:
+            times = pd.to_datetime(ct, utc=True)
+    else:
+        times = pd.to_datetime(df["time"], utc=True)
+    mask = times <= as_of
+    if not mask.any():
+        return None
+    return int(mask.to_numpy().nonzero()[0][-1])

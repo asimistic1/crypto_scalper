@@ -28,6 +28,7 @@ from core.data import (
     load_proxy_from_env,
     region_block_help_markdown,
     region_block_user_message,
+    use_lightweight_binance,
 )
 from core.indicators import add_basic_indicators, add_emas
 
@@ -45,10 +46,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("Crypto Scalper")
-st.caption("Live Binance USDT-M futures chart — Phase 1")
-
-
 def _resolve_binance_proxy() -> str | None:
     """Secrets (cloud) override .env (local). Credentials stay out of logs."""
     proxy = load_proxy_from_env()
@@ -64,18 +61,23 @@ def _resolve_binance_proxy() -> str | None:
 
 configure_network(_resolve_binance_proxy())
 _PROXY_KEY = _resolve_binance_proxy() or ""
+_LIGHTWEIGHT = use_lightweight_binance()
+
+# ccxt + load_markets() is skipped on Render — avoids the heaviest REST burst.
+if not _LIGHTWEIGHT:
 
 
-@st.cache_resource(show_spinner=False)
-def cached_binance_exchange(proxy_key: str):
-    """
-    One ccxt client per server process — load_markets() runs only here.
-    proxy_key must be a string so cache invalidates when secrets change.
-    """
-    return create_binance_exchange(proxy_key or None)
+    @st.cache_resource(show_spinner=False)
+    def cached_binance_exchange(proxy_key: str):
+        return create_binance_exchange(proxy_key or None)
 
+    bind_exchange(cached_binance_exchange(_PROXY_KEY))
 
-bind_exchange(cached_binance_exchange(_PROXY_KEY))
+_OHLCV_TTL = 30 if _LIGHTWEIGHT else 15
+
+st.title("Crypto Scalper")
+_mode = "lightweight REST (cloud)" if _LIGHTWEIGHT else "ccxt"
+st.caption(f"Live Binance USDT-M futures chart — Phase 1 • data mode: {_mode}")
 
 
 def _show_region_block_help(err: str | None) -> None:
@@ -94,33 +96,33 @@ def _clear_rate_limit_if_ok(err: str | None) -> None:
         del st.session_state["rate_limit_until"]
 
 
-def _show_rate_limit_banner(err: str | None) -> None:
+def _show_rate_limit_banner(err: str | None, *, show_stale_hint: bool = False) -> None:
     if not is_rate_limit_message(err):
         return
     _mark_rate_limited()
     until = st.session_state.get("rate_limit_until", time.time() + RATE_LIMIT_COOLDOWN_SEC)
     remaining = max(0, int(until - time.time()))
+    extra = " Showing your last good chart below." if show_stale_hint else ""
     st.warning(
         f"⏳ Binance rate limit — too many requests from this server IP. "
-        f"Retry in **{remaining}s** (or click **Analyze** after the countdown). "
-        f"Auto-refresh stays off by default to protect your limits."
+        f"Retry in **{remaining}s** (or click **Analyze** after the countdown).{extra}"
     )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_top_symbols(n: int) -> tuple[tuple[str, ...], str | None]:
-    """Top coins list — at most one fetch_tickers() per hour per server."""
-    symbols, err = get_top_symbols(n)
+def cached_top_symbols(n: int, fetch_volume_ranking: bool) -> tuple[tuple[str, ...], str | None]:
+    """Top coins — on Render uses static list unless user requests ranking (heavy)."""
+    symbols, err = get_top_symbols(n, fetch_volume_ranking=fetch_volume_ranking)
     return tuple(symbols), err
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=_OHLCV_TTL, show_spinner=False)
 def cached_fetch_ohlcv(ccxt_symbol: str, timeframe: str, limit: int):
     """Raw OHLCV from Binance — short TTL so UI clicks don't spam the API."""
     return get_candles(ccxt_symbol, timeframe, limit)
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=_OHLCV_TTL, show_spinner=False)
 def cached_ticker(ccxt_symbol: str):
     return get_ticker(ccxt_symbol)
 
@@ -155,13 +157,24 @@ def metric_number(val) -> str:
 with st.sidebar:
     st.header("Settings")
 
-    symbols, sym_err = cached_top_symbols(30)
+    if "fetch_coin_ranking" not in st.session_state:
+        st.session_state["fetch_coin_ranking"] = False
+
+    if st.button(
+        "Load top 30 by volume (heavy API)",
+        use_container_width=True,
+        help="Skipped on cloud by default — calls fetch_tickers once per hour when enabled.",
+    ):
+        st.session_state["fetch_coin_ranking"] = True
+        cached_top_symbols.clear()
+
+    symbols, sym_err = cached_top_symbols(30, st.session_state["fetch_coin_ranking"])
     symbols = list(symbols)
-    if sym_err:
+    if sym_err and not is_rate_limit_message(sym_err):
         st.warning(sym_err)
         _show_region_block_help(sym_err)
-        if is_rate_limit_message(sym_err):
-            _show_rate_limit_banner(sym_err)
+    elif sym_err:
+        st.caption(sym_err)
     if not symbols:
         symbols = list(TOP_SYMBOLS_FALLBACK)
 
@@ -191,16 +204,28 @@ with st.sidebar:
 if auto_refresh:
     st_autorefresh(interval=refresh_ms, key="price_autorefresh")
 
+chart_key = (ccxt_symbol, timeframe, candle_limit)
 df, candle_err = load_candle_data(ccxt_symbol, timeframe, candle_limit)
+
+if df is not None and not candle_err:
+    st.session_state["last_good_chart"] = df
+    st.session_state["last_good_chart_key"] = chart_key
 
 _clear_rate_limit_if_ok(candle_err)
 
 if candle_err:
-    st.error(candle_err)
-    _show_region_block_help(candle_err)
     if is_rate_limit_message(candle_err):
-        _show_rate_limit_banner(candle_err)
-    st.stop()
+        stale = st.session_state.get("last_good_chart")
+        if stale is not None:
+            _show_rate_limit_banner(candle_err, show_stale_hint=True)
+            df, candle_err = stale, None
+        else:
+            _show_rate_limit_banner(candle_err)
+            st.stop()
+    else:
+        st.error(candle_err)
+        _show_region_block_help(candle_err)
+        st.stop()
 
 if df is None or df.empty:
     st.error("No chart data available.")
@@ -208,9 +233,8 @@ if df is None or df.empty:
 
 ticker, ticker_err = cached_ticker(ccxt_symbol)
 if ticker_err:
-    st.warning(ticker_err)
-    if is_rate_limit_message(ticker_err):
-        _show_rate_limit_banner(ticker_err)
+    if not is_rate_limit_message(ticker_err):
+        st.warning(ticker_err)
     ticker = {}
 
 last_row = df.iloc[-1]

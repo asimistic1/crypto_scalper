@@ -1,6 +1,7 @@
 streamlit
 plotly
 ccxt
+requests
 pandas
 ta
 python-dotenv

@@ -1,185 +1,301 @@
 """
-Crypto Scalper — Phase 1: live WebSocket chart (browser ↔ Binance).
+Crypto Scalper — Phase 2: live chart + setup engine.
 Run: streamlit run streamlit_app.py  (inside venv)
 """
 
 from __future__ import annotations
 
+import time
+from datetime import timedelta
+
 import streamlit as st
 
+from core.data import TOP_SYMBOLS_FALLBACK, region_block_help_markdown, region_block_user_message
 from core.rate_limit import BinanceCooldownActive, banner_message, is_in_cooldown
+from core.symbol_ranking import display_to_rest
+from core.weight_budget import weight_used_this_minute
+from ui.setup_card import render_setup_card
 
-from core.data import (
-    TOP_SYMBOLS_FALLBACK,
-    DataFetchError,
-    bind_exchange,
-    configure_network,
-    create_binance_exchange,
-    display_to_ccxt_symbol,
-    fetch_ohlcv_dataframe,
-    fetch_top_symbols_list,
-    load_proxy_from_env,
-    region_block_help_markdown,
-    region_block_user_message,
-    use_lightweight_binance,
-)
-from core.live_chart import render_live_chart
+ANALYZE_DEBOUNCE_SECONDS = 3
+
 st.set_page_config(page_title="Crypto Scalper", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(
     """
     <style>
     .stApp { background-color: #0e1117; }
+    @media (max-width: 900px) {
+        [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-def _resolve_binance_proxy() -> str | None:
-    proxy = load_proxy_from_env()
-    for key in ("BINANCE_HTTPS_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
-        try:
-            if key in st.secrets and str(st.secrets[key]).strip():
-                proxy = str(st.secrets[key]).strip()
-                break
-        except (FileNotFoundError, KeyError):
-            pass
-    return proxy
+def _init_session() -> None:
+    defaults = {
+        "display_symbol": "BTC/USDT",
+        "timeframe": "15m",
+        "quote_volumes": {},
+        "analysis_setup": None,
+        "analysis_overlays": {},
+        "analysis_diag": None,
+        "last_analyzed_close_ms": 0,
+        "last_analyze_ts": 0.0,
+        "last_event_nonce": "",
+        "last_chart_status": None,
+        "analysis_context_key": "",
+        "analyze_requested": False,
+        "chart_latency_ms": None,
+    }
+    for key, val in defaults.items():
+        st.session_state.setdefault(key, val)
 
 
-configure_network(_resolve_binance_proxy())
-_PROXY_KEY = _resolve_binance_proxy() or ""
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_top_symbols_and_volumes() -> tuple[tuple[str, ...], dict[str, float]]:
+    from core.symbol_ranking import fetch_top_symbols_by_volume
 
-if not use_lightweight_binance():
-
-    @st.cache_resource(show_spinner=False)
-    def cached_binance_exchange(proxy_key: str):
-        return create_binance_exchange(proxy_key or None)
-
-    bind_exchange(cached_binance_exchange(_PROXY_KEY))
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def cached_top_symbols(n: int, fetch_volume_ranking: bool) -> tuple[str, ...]:
-    return tuple(fetch_top_symbols_list(n, fetch_volume_ranking=fetch_volume_ranking))
+    try:
+        return fetch_top_symbols_by_volume(30)
+    except (BinanceCooldownActive, Exception):
+        vols = {display_to_rest(s): 0.0 for s in TOP_SYMBOLS_FALLBACK}
+        return tuple(TOP_SYMBOLS_FALLBACK), vols
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def bootstrap_candles(ccxt_symbol: str, timeframe: str, limit: int):
-    """One-time Python fallback history for the iframe if browser CORS fails."""
-    return fetch_ohlcv_dataframe(ccxt_symbol, timeframe, limit)
+@st.cache_resource(show_spinner=False)
+def _storage_ready() -> bool:
+    from core.storage import init_db
 
+    init_db()
+    return True
+
+
+def _debounce_ok() -> bool:
+    elapsed = time.time() - float(st.session_state.get("last_analyze_ts", 0.0))
+    return elapsed >= ANALYZE_DEBOUNCE_SECONDS
+
+
+def _record_analyze() -> None:
+    st.session_state["last_analyze_ts"] = time.time()
+
+
+def _run_analysis(toggles: dict[str, bool]) -> None:
+    from core.analysis_service import run_analysis
+
+    display = st.session_state["display_symbol"]
+    tf = st.session_state["timeframe"]
+    rest = display_to_rest(display)
+    qv = float(st.session_state["quote_volumes"].get(rest, 0.0))
+    try:
+        result = run_analysis(display, tf, qv, toggles=toggles)
+    except BinanceCooldownActive:
+        st.warning(banner_message())
+        return
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Analysis failed: {exc}")
+        return
+
+    st.session_state["analysis_setup"] = result.setup
+    st.session_state["analysis_overlays"] = result.overlays
+    st.session_state["analysis_diag"] = result.diagnostics
+    st.session_state["last_analyzed_close_ms"] = result.last_close_ms
+    st.session_state["analysis_context_key"] = f"{rest}|{tf}"
+
+
+def _handle_chart_event(event: dict | None) -> str | None:
+    if not event or not isinstance(event, dict):
+        return None
+    nonce = str(event.get("nonce", ""))
+    if nonce and nonce == st.session_state.get("last_event_nonce"):
+        return None
+    rest = display_to_rest(st.session_state["display_symbol"])
+    if event.get("symbol") != rest or event.get("timeframe") != st.session_state["timeframe"]:
+        return None
+    st.session_state["last_event_nonce"] = nonce
+    kind = event.get("event")
+    if kind == "status_changed":
+        setup_id = event.get("setup_id")
+        status = event.get("status")
+        if setup_id and status:
+            from core.storage import update_signal_status
+
+            update_signal_status(setup_id, str(status))
+            st.session_state["last_chart_status"] = str(status)
+        return None
+    if kind == "candle_closed":
+        return "candle_closed"
+    return None
+
+
+def _maybe_analyze(toggles: dict[str, bool], trigger: str | None) -> None:
+    rest = display_to_rest(st.session_state["display_symbol"])
+    ctx = f"{rest}|{st.session_state['timeframe']}"
+    if ctx != st.session_state.get("analysis_context_key"):
+        _run_analysis(toggles)
+        _record_analyze()
+        return
+    if trigger == "candle_closed":
+        _run_analysis(toggles)
+        _record_analyze()
+        return
+    if st.session_state.get("analyze_requested"):
+        if _debounce_ok():
+            _run_analysis(toggles)
+            _record_analyze()
+            st.session_state["analyze_requested"] = False
+        else:
+            st.toast(f"Analyze cooldown — wait {ANALYZE_DEBOUNCE_SECONDS}s", icon="⏳")
+
+
+_init_session()
+_storage_ready()
 
 st.title("Crypto Scalper")
-st.caption("Binance USDT-M Perpetual — live WebSocket chart (Last Price)")
+st.caption("Binance USDT-M Perpetual · live WebSocket chart + setup engine")
 
 if is_in_cooldown():
-    st.warning(f"⏳ Python REST cooldown active (analysis only): {banner_message()}")
+    st.warning(f"⏳ REST cooldown: {banner_message()}")
 
 with st.sidebar:
     st.header("Settings")
 
-    if "fetch_coin_ranking" not in st.session_state:
-        st.session_state["fetch_coin_ranking"] = False
-
-    if st.button("Load top 30 by volume (heavy API)", use_container_width=True):
-        st.session_state["fetch_coin_ranking"] = True
-        cached_top_symbols.clear()
-
-    try:
-        symbols = list(cached_top_symbols(30, st.session_state["fetch_coin_ranking"]))
-        sym_err = None
-    except (DataFetchError, BinanceCooldownActive) as e:
-        symbols = list(TOP_SYMBOLS_FALLBACK)
-        sym_err = getattr(e, "message", str(e))
-        if isinstance(e, BinanceCooldownActive):
-            sym_err = banner_message()
-
-    if sym_err and sym_err not in (banner_message(), region_block_user_message()):
-        st.warning(sym_err)
-    if sym_err == region_block_user_message():
-        st.warning(sym_err)
-        with st.expander("Why is Binance blocked?"):
-            st.markdown(region_block_help_markdown())
+    symbols, volumes = cached_top_symbols_and_volumes()
+    st.session_state["quote_volumes"] = volumes
 
     if not symbols:
-        symbols = list(TOP_SYMBOLS_FALLBACK)
+        symbols = tuple(TOP_SYMBOLS_FALLBACK)
 
     default_idx = symbols.index("BTC/USDT") if "BTC/USDT" in symbols else 0
     display_symbol = st.selectbox("Coin", symbols, index=default_idx)
-    ccxt_symbol = display_to_ccxt_symbol(display_symbol)
+    st.session_state["display_symbol"] = display_symbol
 
     timeframe = st.radio("Timeframe", ["5m", "15m", "1h"], index=1, horizontal=True)
-    history_limit = st.slider("History candles", min_value=100, max_value=1000, value=500, step=50)
-    live_stream = st.toggle(
-        "Live stream",
-        value=True,
-        help="When off, the chart pauses WebSocket updates until you turn it back on.",
-    )
-    show_demo_overlays = st.toggle(
-        "Show demo overlays",
-        value=False,
-        help="Phase 2 placeholder lines/zones — off by default.",
-    )
+    st.session_state["timeframe"] = timeframe
+
+    history_limit = st.slider("History candles", 100, 1000, 500, 50)
+    live_stream = st.toggle("Live stream", value=True)
     st.markdown("**Chart layers**")
-    toggle_zones = st.checkbox("Support / resistance zones", value=True)
-    toggle_swings = st.checkbox("Swing markers", value=True)
-    toggle_emas = st.checkbox("EMAs", value=True)
-    toggle_vwap = st.checkbox("VWAP", value=False)
-    toggle_setup = st.checkbox("Setup lines", value=True)
-
-chart_col, setup_col = st.columns([4, 1])
-
-fb_df = None
-if not is_in_cooldown():
-    try:
-        fb_df = bootstrap_candles(ccxt_symbol, timeframe, history_limit)
-    except Exception:
-        fb_df = None
-
-overlays = None
-if show_demo_overlays and fb_df is not None and not fb_df.empty:
-    close = float(fb_df.iloc[-1]["close"])
-    overlays = {
-        "lines": [{"price": close, "color": "#2962FF", "title": "Entry (demo)", "style": "solid"}],
-        "zones": [
-            {
-                "from": close * 0.998,
-                "to": close * 1.002,
-                "color": "rgba(14,203,129,0.35)",
-                "label": "Support (demo)",
-            }
-        ],
+    chart_toggles = {
+        "zones": st.checkbox("Support / resistance zones", True),
+        "swings": st.checkbox("Swing markers", True),
+        "emas": st.checkbox("EMAs", True),
+        "vwap": st.checkbox("VWAP", False),
+        "setup_lines": st.checkbox("Setup lines", True),
     }
 
-chart_toggles = {
-    "zones": toggle_zones,
-    "swings": toggle_swings,
-    "emas": toggle_emas,
-    "vwap": toggle_vwap,
-    "setup_lines": toggle_setup,
-}
+    if st.button("Analyze", use_container_width=True, type="primary"):
+        if _debounce_ok():
+            st.session_state["analyze_requested"] = True
+        else:
+            st.warning(f"Please wait {ANALYZE_DEBOUNCE_SECONDS}s between analyses.")
 
-with chart_col:
-    chart_event = render_live_chart(
-        ccxt_symbol,
-        timeframe,
-        overlays=overlays,
-        height=750,
-        fallback_candles=fb_df,
-        history_limit=history_limit,
-        streaming_enabled=live_stream,
-        toggles=chart_toggles,
-    )
-    if chart_event:
-        st.session_state["last_chart_event"] = chart_event
+    st.caption(f"API weight this minute: **{weight_used_this_minute()}**")
 
-with setup_col:
-    st.subheader("Trade Setup")
-    st.info("Setup analysis coming in Phase 2. Overlays will be drawn on the live chart.")
+
+@st.fragment
+def chart_and_setup_panel() -> None:
+    from core.candle_store import get_closed_candles
+    from core.exchange_info import tick_size
+    from core.live_chart import render_live_chart
+
+    toggles = chart_toggles
+    rest = display_to_rest(st.session_state["display_symbol"])
+    tf = st.session_state["timeframe"]
+
+    chart_event = None
+    chart_col, setup_col = st.columns([72, 28])
+
+    fb_df = None
+    if not is_in_cooldown():
+        try:
+            fb_df = get_closed_candles(rest, tf, full=True).df.tail(history_limit)
+        except Exception:
+            fb_df = None
+
+    with chart_col:
+        chart_event = render_live_chart(
+            display_symbol,
+            tf,
+            overlays=st.session_state.get("analysis_overlays") or {},
+            height=720,
+            fallback_candles=fb_df,
+            history_limit=history_limit,
+            streaming_enabled=live_stream,
+            tick_size=float(tick_size(rest)),
+            toggles=toggles,
+        )
+        if isinstance(chart_event, dict):
+            st.session_state["last_chart_event"] = chart_event
+
+    trigger = _handle_chart_event(chart_event if isinstance(chart_event, dict) else None)
+    _maybe_analyze(toggles, trigger)
+    setup = st.session_state.get("analysis_setup")
+
+    with setup_col:
+        st.subheader("Setup Card")
+        if setup:
+            render_setup_card(
+                setup,
+                display_symbol,
+                live_status=st.session_state.get("last_chart_status"),
+            )
+        else:
+            st.info("Analyzing…")
+
+    with st.expander("Diagnostics", expanded=False):
+        diag = st.session_state.get("analysis_diag")
+        if diag:
+            st.write(
+                {
+                    "fetch_ms": round(diag.fetch_ms, 1),
+                    "indicators_ms": round(diag.indicators_ms, 1),
+                    "levels_ms": round(diag.levels_ms, 1),
+                    "setup_ms": round(diag.setup_ms, 1),
+                    "cache_hits": diag.cache_hits,
+                    "cache_misses": diag.cache_misses,
+                }
+            )
+        st.caption(f"API weight this minute: **{weight_used_this_minute()}**")
+        ev = st.session_state.get("last_chart_event")
+        if ev:
+            st.json(ev)
+
+
+@st.fragment(run_every=timedelta(seconds=30))
+def missed_candle_guard() -> None:
+    """Lightweight tail fetch (~1 weight) if the browser missed a candle_closed event."""
+    if is_in_cooldown():
+        return
+    from core.candle_store import get_closed_candles
+
+    rest = display_to_rest(st.session_state.get("display_symbol", "BTC/USDT"))
+    tf = st.session_state.get("timeframe", "15m")
+    try:
+        res = get_closed_candles(rest, tf)
+        if res.df.empty:
+            return
+        last_ms = int(res.df["close_time"].iloc[-1])
+        prev = int(st.session_state.get("last_analyzed_close_ms", 0))
+        if last_ms > prev:
+            toggles = {
+                "zones": True,
+                "swings": True,
+                "emas": True,
+                "vwap": False,
+                "setup_lines": True,
+            }
+            _run_analysis(toggles)
+            _record_analyze()
+    except (BinanceCooldownActive, Exception):
+        pass
+
+
+chart_and_setup_panel()
+missed_candle_guard()
 
 st.caption(
-    "Live data streams from your browser to Binance Futures (/market WebSocket). "
-    "Streamlit does not poll prices — match against Binance app → BTCUSDT Perpetual → Last Price."
+    "Live prices stream in the browser (Binance /market WebSocket). "
+    "Analysis uses closed candles only — no look-ahead."
 )

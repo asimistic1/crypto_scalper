@@ -170,3 +170,23 @@ def reset_thread_connection_for_tests() -> None:
 def reset_schema_cache_for_tests() -> None:
     with _schema_lock:
         _schema_ready.clear()
+
+
+def update_signal_status(setup_id: str, status: str, *, db_path: Path | None = None) -> bool:
+    """Update lifecycle status from chart events."""
+    if not setup_id or not status:
+        return False
+    path = db_path or get_db_path()
+    init_db(path)
+    conn = _connect(path)
+    updated = _now_utc()
+    cur = conn.execute(
+        """
+        UPDATE signals
+        SET status = ?, status_updated_at = ?
+        WHERE setup_id = ?
+        """,
+        (status, updated, setup_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0

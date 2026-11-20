@@ -37,9 +37,23 @@
       }
       #status-dot.live { background: #0ecb81; }
       #status-dot.reconnecting { background: #f0b90b; }
+      #ema-legend {
+        position: absolute;
+        top: 8px;
+        left: 12px;
+        z-index: 6;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        pointer-events: none;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        line-height: 1.4;
+      }
+      #ema-legend .ema-item { white-space: nowrap; }
       #legend {
         position: absolute;
-        top: 62px;
+        top: 32px;
         left: 12px;
         z-index: 5;
         font-size: 11px;
@@ -77,8 +91,11 @@
         <span>ATR(14): <b id="atr">—</b></span>
       </div>
     </div>
-    <div id="legend"></div>
-    <div id="chart-wrap"><div id="chart-container"></div></div>
+    <div id="chart-wrap">
+      <div id="ema-legend"></div>
+      <div id="legend"></div>
+      <div id="chart-container"></div>
+    </div>
 
     <script>
       /*__INJECT_CONFIG__*/
@@ -102,9 +119,10 @@
         let backoffIx = 0;
         let reconnectTimer = null;
         let candles = [];
-        let precision = { minMove: 0.1, precision: 1 };
+        let precision = { type: "price", minMove: 0.1, precision: 1 };
         let lastAggPrice = null;
         let currentPriceLine = null;
+        let crosshairActive = false;
 
         const el = (id) => document.getElementById(id);
 
@@ -118,11 +136,48 @@
           });
         }
 
+        function precisionFromTickSize(tickSize) {
+          const s = String(tickSize);
+          if (!s.includes(".")) return 0;
+          return s.split(".")[1].length;
+        }
+
         function fmtNum(n, prec) {
           if (n == null || isNaN(n)) return "—";
-          return Number(n).toLocaleString(undefined, {
-            minimumFractionDigits: prec,
-            maximumFractionDigits: prec,
+          const p = prec != null ? prec : precision.precision;
+          return Number(n).toLocaleString("en-US", {
+            minimumFractionDigits: p,
+            maximumFractionDigits: p,
+          });
+        }
+
+        function fmtPrice(n) {
+          return fmtNum(n, precision.precision);
+        }
+
+        function chartPriceFormat() {
+          return {
+            type: "price",
+            precision: precision.precision,
+            minMove: precision.minMove,
+          };
+        }
+
+        function applyPriceFormatAll() {
+          const pf = chartPriceFormat();
+          candleSeries.applyOptions({ priceFormat: pf });
+          [9, 21, 50, 200].forEach((p) => {
+            emaLineSeries[p].applyOptions({
+              priceFormat: pf,
+              lastValueVisible: true,
+              title: "EMA " + p,
+            });
+          });
+          chart.applyOptions({
+            localization: {
+              timeFormatter: (t) => fmtTime(t),
+              priceFormatter: (price) => fmtPrice(price),
+            },
           });
         }
 
@@ -209,10 +264,48 @@
           return data;
         }
 
+        function emaAtIndex(candleIdx, period) {
+          if (candleIdx < 0 || !candles.length) return null;
+          const closes = candles.map((c) => c.close);
+          const ema = calcEMA(closes, period);
+          return ema[candleIdx];
+        }
+
+        function renderEmaLegend(candleIdx) {
+          const box = el("ema-legend");
+          if (!candles.length || candleIdx == null || candleIdx < 0) {
+            box.innerHTML = "";
+            return;
+          }
+          const parts = [];
+          [9, 21, 50, 200].forEach((p) => {
+            const v = emaAtIndex(candleIdx, p);
+            if (v == null) return;
+            parts.push(
+              '<span class="ema-item" style="color:' +
+                EMA_COLORS[p] +
+                '">EMA ' +
+                p +
+                ": " +
+                fmtPrice(v) +
+                "</span>"
+            );
+          });
+          box.innerHTML = parts.join("");
+        }
+
         function refreshEmaLines() {
+          const lastIdx = candles.length - 1;
           [9, 21, 50, 200].forEach((p) => {
             emaLineSeries[p].setData(emaSeriesData(p));
+            const v = emaAtIndex(lastIdx, p);
+            if (v != null) {
+              emaLineSeries[p].applyOptions({ title: "EMA " + p + " " + fmtPrice(v) });
+            }
           });
+          if (!crosshairActive) {
+            renderEmaLegend(lastIdx);
+          }
         }
 
         const container = el("chart-container");
@@ -228,6 +321,7 @@
           crosshair: { mode: CrosshairMode.Normal },
           localization: {
             timeFormatter: (t) => fmtTime(t),
+            priceFormatter: (price) => fmtPrice(price),
           },
           timeScale: {
             timeVisible: true,
@@ -244,7 +338,7 @@
           borderDownColor: DOWN,
           wickUpColor: UP,
           wickDownColor: DOWN,
-          priceFormat: precision,
+          priceFormat: chartPriceFormat(),
         });
 
         const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -265,7 +359,8 @@
             lineWidth: 1,
             title: "EMA " + p,
             priceLineVisible: false,
-            lastValueVisible: false,
+            lastValueVisible: true,
+            priceFormat: chartPriceFormat(),
           });
         });
 
@@ -319,6 +414,9 @@
           );
           refreshEmaLines();
           updateIndicators();
+          if (!crosshairActive && candles.length) {
+            renderEmaLegend(candles.length - 1);
+          }
         }
 
         function mergeCandles(existing, incoming) {
@@ -386,13 +484,14 @@
             if (!sym) return;
             const pf = sym.pricePrecision;
             const tick = sym.filters.find((f) => f.filterType === "PRICE_FILTER");
-            const minMove = tick ? parseFloat(tick.tickSize) : Math.pow(10, -pf);
+            const tickSize = tick ? tick.tickSize : String(Math.pow(10, -pf));
+            const minMove = parseFloat(tickSize);
             precision = {
+              type: "price",
               minMove: minMove,
-              precision: pf,
+              precision: precisionFromTickSize(tickSize),
             };
-            candleSeries.applyOptions({ priceFormat: precision });
-            chart.applyOptions({});
+            applyPriceFormatAll();
           } catch (e) {
             console.warn("exchangeInfo", e);
           }
@@ -502,22 +601,36 @@
         chart.subscribeCrosshairMove((param) => {
           const leg = el("legend");
           if (!param.time || !param.seriesData.size) {
+            crosshairActive = false;
             leg.style.display = "none";
+            renderEmaLegend(candles.length - 1);
             return;
           }
           const c = param.seriesData.get(candleSeries);
           const v = param.seriesData.get(volumeSeries);
           if (!c) {
+            crosshairActive = false;
             leg.style.display = "none";
+            renderEmaLegend(candles.length - 1);
             return;
           }
+          crosshairActive = true;
+          const idx = candles.findIndex((row) => row.time === param.time);
+          const emaIdx = idx >= 0 ? idx : candles.length - 1;
+          renderEmaLegend(emaIdx);
+          [9, 21, 50, 200].forEach((p) => {
+            const v = emaAtIndex(emaIdx, p);
+            if (v != null) {
+              emaLineSeries[p].applyOptions({ title: "EMA " + p + " " + fmtPrice(v) });
+            }
+          });
           leg.style.display = "block";
           leg.innerHTML =
             fmtTime(param.time) +
-            " O " + fmtNum(c.open, precision.precision) +
-            " H " + fmtNum(c.high, precision.precision) +
-            " L " + fmtNum(c.low, precision.precision) +
-            " C " + fmtNum(c.close, precision.precision) +
+            " O " + fmtPrice(c.open) +
+            " H " + fmtPrice(c.high) +
+            " L " + fmtPrice(c.low) +
+            " C " + fmtPrice(c.close) +
             (v ? " Vol " + fmtVol(v.value) : "");
         });
 

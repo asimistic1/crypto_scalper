@@ -117,21 +117,13 @@ with st.sidebar:
         value=True,
         help="When off, the chart pauses WebSocket updates until you turn it back on.",
     )
+    show_demo_overlays = st.toggle(
+        "Show demo overlays",
+        value=False,
+        help="Phase 2 placeholder lines/zones — off by default.",
+    )
 
 chart_col, setup_col = st.columns([4, 1])
-
-# Dummy Phase-2 overlay (entry line at ~last price from JS when price is null)
-_dummy_overlays = {
-    "lines": [{"price": None, "color": "#2962FF", "title": "Entry (demo)", "style": "solid"}],
-    "zones": [
-        {
-            "from": None,
-            "to": None,
-            "color": "rgba(14,203,129,0.35)",
-            "label": "Support (demo)",
-        }
-    ],
-}
 
 fb_df = None
 if not is_in_cooldown():
@@ -140,12 +132,20 @@ if not is_in_cooldown():
     except Exception:
         fb_df = None
 
-overlays = dict(_dummy_overlays)
-if fb_df is not None and not fb_df.empty:
+overlays = None
+if show_demo_overlays and fb_df is not None and not fb_df.empty:
     close = float(fb_df.iloc[-1]["close"])
-    overlays["lines"][0]["price"] = close
-    overlays["zones"][0]["from"] = close * 0.998
-    overlays["zones"][0]["to"] = close * 1.002
+    overlays = {
+        "lines": [{"price": close, "color": "#2962FF", "title": "Entry (demo)", "style": "solid"}],
+        "zones": [
+            {
+                "from": close * 0.998,
+                "to": close * 1.002,
+                "color": "rgba(14,203,129,0.35)",
+                "label": "Support (demo)",
+            }
+        ],
+    }
 
 with chart_col:
     render_live_chart(

@@ -78,7 +78,7 @@ class SwingConfirmationTests(unittest.TestCase):
         z1 = build_zones(swings, atr)
         z2 = build_zones(swings, atr)
         self.assertEqual(len(z1), len(z2))
-        for a, b in zip(z1, z2):
+        for a, b in zip(z1, z2, strict=True):
             self.assertEqual(a.mid, b.mid)
             self.assertEqual(a.touches, b.touches)
 

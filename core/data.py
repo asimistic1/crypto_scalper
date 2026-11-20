@@ -1,6 +1,9 @@
 """
 Fetch public market data from Binance USDT-M perpetual futures via ccxt.
 No API keys required for candles and ticker data.
+
+The Streamlit app must call bind_exchange() with a @st.cache_resource client
+so load_markets() runs only once per server process.
 """
 
 from __future__ import annotations
@@ -12,20 +15,25 @@ import pandas as pd
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
-# Pakistan local time for display in the dashboard
 PAKISTAN_TZ = ZoneInfo("Asia/Karachi")
 
-# Single exchange instance (reused for all requests; app may also wrap with @st.cache_resource)
-_exchange: ccxt.binanceusdm | None = None
+# Hardcoded sidebar fallback when fetch_tickers() is rate-limited or fails.
+TOP_SYMBOLS_FALLBACK = [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+]
+
+# Active client — set from streamlit_app.cached_binance_exchange().
+_active_exchange: ccxt.binanceusdm | None = None
 _proxy_url: str | None = None
 
 
 def load_proxy_from_env() -> str | None:
-    """
-    Read optional HTTPS proxy from .env / environment (local dev).
-    On Streamlit Cloud, the app also copies st.secrets into configure_network().
-    Never log the proxy URL (it may contain credentials).
-    """
+    """Read optional HTTPS proxy from .env (never log — may contain credentials)."""
     load_dotenv()
     for key in ("BINANCE_HTTPS_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
         value = os.getenv(key, "").strip()
@@ -35,33 +43,90 @@ def load_proxy_from_env() -> str | None:
 
 
 def configure_network(proxy_url: str | None = None) -> None:
-    """
-    Set or clear the proxy used for Binance requests. Recreates the exchange client.
-    Call once at app startup (and after changing secrets).
-    """
-    global _exchange, _proxy_url
+    """Remember proxy URL for create_binance_exchange(); clears active client."""
+    global _active_exchange, _proxy_url
     normalized = proxy_url.strip() if proxy_url else None
     if normalized != _proxy_url:
         _proxy_url = normalized
-        _exchange = None
+        _active_exchange = None
+
+
+def create_binance_exchange(proxy_url: str | None = None) -> ccxt.binanceusdm:
+    """
+    Build one Binance USDT-M client and load linear futures markets a single time.
+    Call from @st.cache_resource in the Streamlit app (once per server boot).
+    """
+    config: dict = {
+        "enableRateLimit": True,
+        "options": {
+            # Lighter market metadata — USDT-M linear only (skip spot / inverse).
+            "defaultType": "future",
+            "fetchMarkets": ["linear"],
+        },
+    }
+    if proxy_url:
+        config["proxies"] = {"http": proxy_url, "https": proxy_url}
+
+    exchange = ccxt.binanceusdm(config)
+    # Single heavy REST burst; later calls reuse exchange.markets in memory.
+    exchange.load_markets()
+    return exchange
+
+
+def bind_exchange(exchange: ccxt.binanceusdm) -> None:
+    """Attach the cached Streamlit exchange instance for all data helpers."""
+    global _active_exchange
+    _active_exchange = exchange
+
+
+def get_exchange() -> ccxt.binanceusdm:
+    """
+    Return the bound exchange (preferred) or create one for scripts/tests.
+    """
+    global _active_exchange
+    if _active_exchange is None:
+        _active_exchange = create_binance_exchange(_proxy_url)
+    return _active_exchange
 
 
 def _is_region_block_error(exc: BaseException) -> bool:
-    """Detect HTTP 451 / 403 style blocks from Binance in ccxt error messages."""
     text = str(exc).lower()
     return "451" in text or "403" in text or "restricted location" in text
 
 
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "429" in text
+        or "418" in text
+        or "-1003" in text
+        or "too many requests" in text
+        or "way too many" in text
+    )
+
+
 def region_block_user_message() -> str:
-    """Short message shown in the UI when Binance returns 403/451."""
     return (
         "Binance is blocking this server’s region (very common on Streamlit Cloud US "
         "hosts). Running on your PC may still work."
     )
 
 
+def rate_limit_user_message(retry_seconds: int = 60) -> str:
+    return (
+        f"Binance rate limit (HTTP 418/429). Shared server IPs hit limits quickly. "
+        f"Wait ~{retry_seconds}s, then click Analyze — cached data may still load."
+    )
+
+
+def is_rate_limit_message(msg: str | None) -> bool:
+    if not msg:
+        return False
+    lower = msg.lower()
+    return "rate limit" in lower or "418" in lower or "429" in lower or "-1003" in lower
+
+
 def region_block_help_markdown() -> str:
-    """Longer help text for an expander / docs."""
     return """**Why this happens**  
 Streamlit Community Cloud runs in US/EU data centers. Binance **USDT-M Futures**
 API often refuses those IP addresses (HTTP 451 / 403). That is not a bug in your code.
@@ -85,22 +150,15 @@ def _region_block_message() -> str:
     return region_block_user_message()
 
 
-def get_exchange() -> ccxt.binanceusdm:
-    """
-    Return a shared Binance USDT-M futures client with rate limiting enabled.
-    Uses BINANCE_HTTPS_PROXY / HTTPS_PROXY when configure_network() set one.
-    """
-    global _exchange
-    if _exchange is None:
-        options: dict = {"enableRateLimit": True}
-        if _proxy_url:
-            options["proxies"] = {"http": _proxy_url, "https": _proxy_url}
-        _exchange = ccxt.binanceusdm(options)
-    return _exchange
+def _map_api_error(exc: BaseException) -> str:
+    if _is_region_block_error(exc):
+        return _region_block_message()
+    if _is_rate_limit_error(exc):
+        return rate_limit_user_message()
+    return str(exc)
 
 
 def _timeframe_ms(timeframe: str) -> int:
-    """Convert ccxt timeframe string to milliseconds (for candle close detection)."""
     unit = timeframe[-1]
     value = int(timeframe[:-1])
     multipliers = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
@@ -113,10 +171,9 @@ def get_candles(
     symbol: str, timeframe: str, limit: int = 500
 ) -> tuple[pd.DataFrame | None, str | None]:
     """
-    Download OHLCV candles for a USDT perpetual (e.g. BTC/USDT:USDT).
+    Download OHLCV candles (use streamlit @st.cache_data on this — ttl ~15s).
 
     Returns (dataframe, error_message). On success error_message is None.
-    Columns: time, open, high, low, close, volume, is_closed (bool).
     """
     try:
         exchange = get_exchange()
@@ -128,7 +185,6 @@ def get_candles(
             raw, columns=["timestamp", "open", "high", "low", "close", "volume"]
         )
 
-        # Unix ms -> timezone-aware datetime in Pakistan
         df["time"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(
             PAKISTAN_TZ
         )
@@ -136,7 +192,6 @@ def get_candles(
         for col in ("open", "high", "low", "close", "volume"):
             df[col] = df[col].astype(float)
 
-        # Last row is still forming until the candle period ends
         now_ms = exchange.milliseconds()
         period_ms = _timeframe_ms(timeframe)
         last_open_ms = int(df["timestamp"].iloc[-1])
@@ -147,25 +202,15 @@ def get_candles(
         return df, None
 
     except ccxt.NetworkError as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Network error while fetching candles: {e}"
+        return None, f"Network error while fetching candles: {_map_api_error(e)}"
     except ccxt.ExchangeError as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Exchange error while fetching candles: {e}"
+        return None, f"Exchange error while fetching candles: {_map_api_error(e)}"
     except Exception as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Unexpected error while fetching candles: {e}"
+        return None, f"Unexpected error while fetching candles: {_map_api_error(e)}"
 
 
 def get_ticker(symbol: str) -> tuple[dict | None, str | None]:
-    """
-    24h statistics for the symbol.
-
-    Keys: last, change_pct, high_24h, low_24h, quote_volume_24h.
-    """
+    """24h ticker — cache in the app with a short TTL to limit REST calls."""
     try:
         exchange = get_exchange()
         t = exchange.fetch_ticker(symbol)
@@ -186,30 +231,29 @@ def get_ticker(symbol: str) -> tuple[dict | None, str | None]:
             None,
         )
     except ccxt.NetworkError as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Network error while fetching ticker: {e}"
+        mapped = _map_api_error(e)
+        if _is_rate_limit_error(e):
+            return None, mapped
+        return None, f"Network error while fetching ticker: {mapped}"
     except ccxt.ExchangeError as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Exchange error while fetching ticker: {e}"
+        mapped = _map_api_error(e)
+        if _is_rate_limit_error(e):
+            return None, mapped
+        return None, f"Exchange error while fetching ticker: {mapped}"
     except Exception as e:
-        if _is_region_block_error(e):
-            return None, _region_block_message()
-        return None, f"Unexpected error while fetching ticker: {e}"
+        mapped = _map_api_error(e)
+        return None, f"Unexpected error while fetching ticker: {mapped}"
 
 
 def _display_symbol(ccxt_symbol: str) -> str:
-    """BTC/USDT:USDT -> BTC/USDT for the dropdown label."""
     base = ccxt_symbol.split(":")[0]
     return base
 
 
 def get_top_symbols(n: int = 30) -> tuple[list[str], str | None]:
     """
-    Top USDT perpetual futures by 24h quote volume (for coin selector).
-
-    Returns list of display labels like BTC/USDT, not raw ccxt ids.
+    Top USDT perpetuals by 24h quote volume.
+    Cache in the app with ttl=3600. On 418/429 returns TOP_SYMBOLS_FALLBACK.
     """
     try:
         exchange = get_exchange()
@@ -232,28 +276,19 @@ def get_top_symbols(n: int = 30) -> tuple[list[str], str | None]:
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         top = [_display_symbol(sym) for _, sym in candidates[:n]]
-        # Ensure BTC is available even if ranking shifts
-        if not any(s.startswith("BTC/") for s in top):
-            if "BTC/USDT:USDT" in tickers:
-                top.insert(0, "BTC/USDT")
+        if not any(s.startswith("BTC/") for s in top) and "BTC/USDT:USDT" in tickers:
+            top.insert(0, "BTC/USDT")
         return top, None
 
-    except ccxt.NetworkError as e:
+    except (ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
+        if _is_rate_limit_error(e):
+            return list(TOP_SYMBOLS_FALLBACK), rate_limit_user_message()
         if _is_region_block_error(e):
-            return [], _region_block_message()
-        return [], f"Network error while loading symbol list: {e}"
-    except ccxt.ExchangeError as e:
-        if _is_region_block_error(e):
-            return [], _region_block_message()
-        return [], f"Exchange error while loading symbol list: {e}"
-    except Exception as e:
-        if _is_region_block_error(e):
-            return [], _region_block_message()
-        return [], f"Unexpected error while loading symbol list: {e}"
+            return list(TOP_SYMBOLS_FALLBACK), _region_block_message()
+        return list(TOP_SYMBOLS_FALLBACK), f"Could not load symbol list: {_map_api_error(e)}"
 
 
 def display_to_ccxt_symbol(display: str) -> str:
-    """Convert BTC/USDT dropdown value to ccxt futures symbol BTC/USDT:USDT."""
     if ":" in display:
         return display
     return f"{display}:USDT"

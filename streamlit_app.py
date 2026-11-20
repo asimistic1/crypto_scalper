@@ -1,14 +1,12 @@
 """
 Crypto Scalper — Phase 1: live chart dashboard (Streamlit).
 Run with: streamlit run streamlit_app.py  (inside activated venv)
-
-Note: Streamlit cannot run on Vercel serverless Python. Use Streamlit Community Cloud
-or run locally. Vercel serves only the static page in public/.
 """
 
 from __future__ import annotations
 
 import math
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -18,12 +16,15 @@ from streamlit_autorefresh import st_autorefresh
 
 from core.chart import build_chart
 from core.data import (
+    TOP_SYMBOLS_FALLBACK,
+    bind_exchange,
     configure_network,
+    create_binance_exchange,
     display_to_ccxt_symbol,
     get_candles,
-    get_exchange,
     get_ticker,
     get_top_symbols,
+    is_rate_limit_message,
     load_proxy_from_env,
     region_block_help_markdown,
     region_block_user_message,
@@ -31,8 +32,7 @@ from core.data import (
 from core.indicators import add_basic_indicators, add_emas
 
 PAKISTAN_TZ = ZoneInfo("Asia/Karachi")
-
-FALLBACK_COINS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT"]
+RATE_LIMIT_COOLDOWN_SEC = 60
 
 st.set_page_config(page_title="Crypto Scalper", layout="wide", initial_sidebar_state="expanded")
 
@@ -62,29 +62,72 @@ def _resolve_binance_proxy() -> str | None:
     return proxy
 
 
-# Apply proxy before any Binance call (Streamlit Cloud often needs a non-US egress).
 configure_network(_resolve_binance_proxy())
+_PROXY_KEY = _resolve_binance_proxy() or ""
+
+
+@st.cache_resource(show_spinner=False)
+def cached_binance_exchange(proxy_key: str):
+    """
+    One ccxt client per server process — load_markets() runs only here.
+    proxy_key must be a string so cache invalidates when secrets change.
+    """
+    return create_binance_exchange(proxy_key or None)
+
+
+bind_exchange(cached_binance_exchange(_PROXY_KEY))
 
 
 def _show_region_block_help(err: str | None) -> None:
-    if not err:
-        return
-    if err != region_block_user_message():
+    if not err or err != region_block_user_message():
         return
     with st.expander("Why is Binance blocked on Streamlit Cloud?"):
         st.markdown(region_block_help_markdown())
 
 
-@st.cache_resource
-def cached_exchange():
-    """One ccxt client per Streamlit session (rate limit friendly)."""
-    return get_exchange()
+def _mark_rate_limited() -> None:
+    st.session_state["rate_limit_until"] = time.time() + RATE_LIMIT_COOLDOWN_SEC
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+def _clear_rate_limit_if_ok(err: str | None) -> None:
+    if err is None and "rate_limit_until" in st.session_state:
+        del st.session_state["rate_limit_until"]
+
+
+def _show_rate_limit_banner(err: str | None) -> None:
+    if not is_rate_limit_message(err):
+        return
+    _mark_rate_limited()
+    until = st.session_state.get("rate_limit_until", time.time() + RATE_LIMIT_COOLDOWN_SEC)
+    remaining = max(0, int(until - time.time()))
+    st.warning(
+        f"⏳ Binance rate limit — too many requests from this server IP. "
+        f"Retry in **{remaining}s** (or click **Analyze** after the countdown). "
+        f"Auto-refresh stays off by default to protect your limits."
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_top_symbols(n: int) -> tuple[tuple[str, ...], str | None]:
+    """Top coins list — at most one fetch_tickers() per hour per server."""
+    symbols, err = get_top_symbols(n)
+    return tuple(symbols), err
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def cached_fetch_ohlcv(ccxt_symbol: str, timeframe: str, limit: int):
+    """Raw OHLCV from Binance — short TTL so UI clicks don't spam the API."""
+    return get_candles(ccxt_symbol, timeframe, limit)
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def cached_ticker(ccxt_symbol: str):
+    return get_ticker(ccxt_symbol)
+
+
 def load_candle_data(ccxt_symbol: str, timeframe: str, limit: int):
-    """Cached OHLCV + indicators; TTL keeps auto-refresh fast."""
-    df, err = get_candles(ccxt_symbol, timeframe, limit)
+    """Apply indicators on top of cached OHLCV (indicators are cheap CPU only)."""
+    df, err = cached_fetch_ohlcv(ccxt_symbol, timeframe, limit)
     if err or df is None:
         return None, err
     df = add_emas(df)
@@ -93,7 +136,6 @@ def load_candle_data(ccxt_symbol: str, timeframe: str, limit: int):
 
 
 def format_volume(vol: float) -> str:
-    """Human-readable volume like 1.2B / 350M."""
     if vol >= 1_000_000_000:
         return f"{vol / 1_000_000_000:.2f}B"
     if vol >= 1_000_000:
@@ -104,23 +146,24 @@ def format_volume(vol: float) -> str:
 
 
 def metric_number(val) -> str:
-    """Format a numeric indicator for the metric cards, or dash if missing."""
     if val is None or (isinstance(val, float) and (math.isnan(val) or pd.isna(val))):
         return "—"
     return f"{float(val):.2f}"
 
 
-_ = cached_exchange()
-
+# --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
 
-    symbols, sym_err = get_top_symbols(30)
+    symbols, sym_err = cached_top_symbols(30)
+    symbols = list(symbols)
     if sym_err:
         st.warning(sym_err)
         _show_region_block_help(sym_err)
+        if is_rate_limit_message(sym_err):
+            _show_rate_limit_banner(sym_err)
     if not symbols:
-        symbols = FALLBACK_COINS
+        symbols = list(TOP_SYMBOLS_FALLBACK)
 
     default_idx = symbols.index("BTC/USDT") if "BTC/USDT" in symbols else 0
     display_symbol = st.selectbox("Coin", symbols, index=default_idx)
@@ -129,33 +172,45 @@ with st.sidebar:
     timeframe = st.radio("Timeframe", ["5m", "15m", "1h"], index=1, horizontal=True)
     candle_limit = st.slider("Number of candles", min_value=100, max_value=1000, value=300, step=50)
 
-    auto_refresh = st.toggle("Auto-refresh", value=True)
-    interval_labels = {"30s": 30_000, "60s": 60_000, "120s": 120_000}
-    refresh_label = st.selectbox("Refresh interval", list(interval_labels.keys()), index=1)
+    # Default OFF on Render/shared IPs — user opts in to polling (min 60s).
+    auto_refresh = st.toggle(
+        "Auto-refresh",
+        value=False,
+        help="Leave off on cloud hosts to avoid Binance HTTP 418/429.",
+    )
+    interval_labels = {"60s": 60_000, "120s": 120_000}
+    refresh_label = st.selectbox("Refresh interval", list(interval_labels.keys()), index=0)
     refresh_ms = interval_labels[refresh_label]
 
     analyze_clicked = st.button("Analyze", type="primary", use_container_width=True)
 
+    if analyze_clicked:
+        cached_fetch_ohlcv.clear()
+        cached_ticker.clear()
+
 if auto_refresh:
     st_autorefresh(interval=refresh_ms, key="price_autorefresh")
 
-if analyze_clicked:
-    load_candle_data.clear()
-
 df, candle_err = load_candle_data(ccxt_symbol, timeframe, candle_limit)
+
+_clear_rate_limit_if_ok(candle_err)
 
 if candle_err:
     st.error(candle_err)
     _show_region_block_help(candle_err)
+    if is_rate_limit_message(candle_err):
+        _show_rate_limit_banner(candle_err)
     st.stop()
 
 if df is None or df.empty:
     st.error("No chart data available.")
     st.stop()
 
-ticker, ticker_err = get_ticker(ccxt_symbol)
+ticker, ticker_err = cached_ticker(ccxt_symbol)
 if ticker_err:
     st.warning(ticker_err)
+    if is_rate_limit_message(ticker_err):
+        _show_rate_limit_banner(ticker_err)
     ticker = {}
 
 last_row = df.iloc[-1]
@@ -184,7 +239,6 @@ with setup_col:
     st.subheader("Trade Setup")
     st.info("Setup analysis coming in Phase 2.")
 
-# is_closed=False means the current candle is still printing
 still_forming = "yes" if not bool(last_row.get("is_closed", True)) else "no"
 updated = datetime.now(PAKISTAN_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 st.caption(

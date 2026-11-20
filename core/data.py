@@ -5,8 +5,11 @@ No API keys required for candles and ticker data.
 
 from __future__ import annotations
 
+import os
+
 import ccxt
 import pandas as pd
+from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
 # Pakistan local time for display in the dashboard
@@ -14,6 +17,33 @@ PAKISTAN_TZ = ZoneInfo("Asia/Karachi")
 
 # Single exchange instance (reused for all requests; app may also wrap with @st.cache_resource)
 _exchange: ccxt.binanceusdm | None = None
+_proxy_url: str | None = None
+
+
+def load_proxy_from_env() -> str | None:
+    """
+    Read optional HTTPS proxy from .env / environment (local dev).
+    On Streamlit Cloud, the app also copies st.secrets into configure_network().
+    Never log the proxy URL (it may contain credentials).
+    """
+    load_dotenv()
+    for key in ("BINANCE_HTTPS_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def configure_network(proxy_url: str | None = None) -> None:
+    """
+    Set or clear the proxy used for Binance requests. Recreates the exchange client.
+    Call once at app startup (and after changing secrets).
+    """
+    global _exchange, _proxy_url
+    normalized = proxy_url.strip() if proxy_url else None
+    if normalized != _proxy_url:
+        _proxy_url = normalized
+        _exchange = None
 
 
 def _is_region_block_error(exc: BaseException) -> bool:
@@ -22,19 +52,50 @@ def _is_region_block_error(exc: BaseException) -> bool:
     return "451" in text or "403" in text or "restricted location" in text
 
 
-def _region_block_message() -> str:
+def region_block_user_message() -> str:
+    """Short message shown in the UI when Binance returns 403/451."""
     return (
-        "Binance is blocking this network/region. Try another internet connection or VPN."
+        "Binance is blocking this server’s region (very common on Streamlit Cloud US "
+        "hosts). Running on your PC may still work."
     )
+
+
+def region_block_help_markdown() -> str:
+    """Longer help text for an expander / docs."""
+    return """**Why this happens**  
+Streamlit Community Cloud runs in US/EU data centers. Binance **USDT-M Futures**
+API often refuses those IP addresses (HTTP 451 / 403). That is not a bug in your code.
+
+**What usually works**
+
+1. **Use the app on your PC** — `streamlit run streamlit_app.py` (your home IP is often allowed).
+2. **Self-host Streamlit** on a small VPS in Asia/Middle East/Europe (not US), then run the same repo there.
+3. **Optional proxy** — In [Streamlit app settings → Secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management),
+   add a proxy in an allowed region (paid service; you are responsible for compliance):
+
+```toml
+BINANCE_HTTPS_PROXY = "http://USER:PASS@proxy-host:PORT"
+```
+
+Reboot the app after saving secrets. Never commit real proxy credentials to GitHub.
+"""
+
+
+def _region_block_message() -> str:
+    return region_block_user_message()
 
 
 def get_exchange() -> ccxt.binanceusdm:
     """
     Return a shared Binance USDT-M futures client with rate limiting enabled.
+    Uses BINANCE_HTTPS_PROXY / HTTPS_PROXY when configure_network() set one.
     """
     global _exchange
     if _exchange is None:
-        _exchange = ccxt.binanceusdm({"enableRateLimit": True})
+        options: dict = {"enableRateLimit": True}
+        if _proxy_url:
+            options["proxies"] = {"http": _proxy_url, "https": _proxy_url}
+        _exchange = ccxt.binanceusdm(options)
     return _exchange
 
 

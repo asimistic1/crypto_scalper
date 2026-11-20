@@ -18,11 +18,15 @@ from streamlit_autorefresh import st_autorefresh
 
 from core.chart import build_chart
 from core.data import (
+    configure_network,
     display_to_ccxt_symbol,
     get_candles,
     get_exchange,
     get_ticker,
     get_top_symbols,
+    load_proxy_from_env,
+    region_block_help_markdown,
+    region_block_user_message,
 )
 from core.indicators import add_basic_indicators, add_emas
 
@@ -43,6 +47,32 @@ st.markdown(
 
 st.title("Crypto Scalper")
 st.caption("Live Binance USDT-M futures chart — Phase 1")
+
+
+def _resolve_binance_proxy() -> str | None:
+    """Secrets (cloud) override .env (local). Credentials stay out of logs."""
+    proxy = load_proxy_from_env()
+    for key in ("BINANCE_HTTPS_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+        try:
+            if key in st.secrets and str(st.secrets[key]).strip():
+                proxy = str(st.secrets[key]).strip()
+                break
+        except (FileNotFoundError, KeyError):
+            pass
+    return proxy
+
+
+# Apply proxy before any Binance call (Streamlit Cloud often needs a non-US egress).
+configure_network(_resolve_binance_proxy())
+
+
+def _show_region_block_help(err: str | None) -> None:
+    if not err:
+        return
+    if err != region_block_user_message():
+        return
+    with st.expander("Why is Binance blocked on Streamlit Cloud?"):
+        st.markdown(region_block_help_markdown())
 
 
 @st.cache_resource
@@ -88,6 +118,7 @@ with st.sidebar:
     symbols, sym_err = get_top_symbols(30)
     if sym_err:
         st.warning(sym_err)
+        _show_region_block_help(sym_err)
     if not symbols:
         symbols = FALLBACK_COINS
 
@@ -115,6 +146,7 @@ df, candle_err = load_candle_data(ccxt_symbol, timeframe, candle_limit)
 
 if candle_err:
     st.error(candle_err)
+    _show_region_block_help(candle_err)
     st.stop()
 
 if df is None or df.empty:

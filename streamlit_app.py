@@ -6,24 +6,26 @@ Run with: streamlit run streamlit_app.py  (inside activated venv)
 from __future__ import annotations
 
 import math
-import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 from core.chart import build_chart
+from core.chart_store import get as get_stored_chart, save as save_stored_chart
+from core.rate_limit import BinanceCooldownActive, banner_message, is_in_cooldown
+
 from core.data import (
     TOP_SYMBOLS_FALLBACK,
+    DataFetchError,
     bind_exchange,
     configure_network,
     create_binance_exchange,
     display_to_ccxt_symbol,
-    get_candles,
-    get_ticker,
-    get_top_symbols,
+    fetch_ohlcv_dataframe,
+    fetch_ticker_dict,
+    fetch_top_symbols_list,
     is_rate_limit_message,
     load_proxy_from_env,
     region_block_help_markdown,
@@ -31,9 +33,7 @@ from core.data import (
     use_lightweight_binance,
 )
 from core.indicators import add_basic_indicators, add_emas
-
 PAKISTAN_TZ = ZoneInfo("Asia/Karachi")
-RATE_LIMIT_COOLDOWN_SEC = 60
 
 st.set_page_config(page_title="Crypto Scalper", layout="wide", initial_sidebar_state="expanded")
 
@@ -46,8 +46,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 def _resolve_binance_proxy() -> str | None:
-    """Secrets (cloud) override .env (local). Credentials stay out of logs."""
     proxy = load_proxy_from_env()
     for key in ("BINANCE_HTTPS_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
         try:
@@ -63,9 +63,7 @@ configure_network(_resolve_binance_proxy())
 _PROXY_KEY = _resolve_binance_proxy() or ""
 _LIGHTWEIGHT = use_lightweight_binance()
 
-# ccxt + load_markets() is skipped on Render — avoids the heaviest REST burst.
 if not _LIGHTWEIGHT:
-
 
     @st.cache_resource(show_spinner=False)
     def cached_binance_exchange(proxy_key: str):
@@ -73,68 +71,72 @@ if not _LIGHTWEIGHT:
 
     bind_exchange(cached_binance_exchange(_PROXY_KEY))
 
-_OHLCV_TTL = 30 if _LIGHTWEIGHT else 15
-
-st.title("Crypto Scalper")
-_mode = "lightweight REST (cloud)" if _LIGHTWEIGHT else "ccxt"
-st.caption(f"Live Binance USDT-M futures chart — Phase 1 • data mode: {_mode}")
-
-
-def _show_region_block_help(err: str | None) -> None:
-    if not err or err != region_block_user_message():
-        return
-    with st.expander("Why is Binance blocked on Streamlit Cloud?"):
-        st.markdown(region_block_help_markdown())
-
-
-def _mark_rate_limited() -> None:
-    st.session_state["rate_limit_until"] = time.time() + RATE_LIMIT_COOLDOWN_SEC
-
-
-def _clear_rate_limit_if_ok(err: str | None) -> None:
-    if err is None and "rate_limit_until" in st.session_state:
-        del st.session_state["rate_limit_until"]
-
-
-def _show_rate_limit_banner(err: str | None, *, show_stale_hint: bool = False) -> None:
-    if not is_rate_limit_message(err):
-        return
-    _mark_rate_limited()
-    until = st.session_state.get("rate_limit_until", time.time() + RATE_LIMIT_COOLDOWN_SEC)
-    remaining = max(0, int(until - time.time()))
-    extra = " Showing your last good chart below." if show_stale_hint else ""
-    st.warning(
-        f"⏳ Binance rate limit — too many requests from this server IP. "
-        f"Retry in **{remaining}s** (or click **Analyze** after the countdown).{extra}"
-    )
-
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_top_symbols(n: int, fetch_volume_ranking: bool) -> tuple[tuple[str, ...], str | None]:
-    """Top coins — on Render uses static list unless user requests ranking (heavy)."""
-    symbols, err = get_top_symbols(n, fetch_volume_ranking=fetch_volume_ranking)
-    return tuple(symbols), err
+def cached_top_symbols(n: int, fetch_volume_ranking: bool) -> tuple[str, ...]:
+    return tuple(fetch_top_symbols_list(n, fetch_volume_ranking=fetch_volume_ranking))
 
 
-@st.cache_data(ttl=_OHLCV_TTL, show_spinner=False)
-def cached_fetch_ohlcv(ccxt_symbol: str, timeframe: str, limit: int):
-    """Raw OHLCV from Binance — short TTL so UI clicks don't spam the API."""
-    return get_candles(ccxt_symbol, timeframe, limit)
+@st.cache_data(ttl=5, show_spinner=False)
+def cached_ticker_dict(ccxt_symbol: str) -> dict:
+    return fetch_ticker_dict(ccxt_symbol)
 
 
-@st.cache_data(ttl=_OHLCV_TTL, show_spinner=False)
-def cached_ticker(ccxt_symbol: str):
-    return get_ticker(ccxt_symbol)
+@st.cache_data(ttl=30, show_spinner=False)
+def cached_ohlcv_df(ccxt_symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    return fetch_ohlcv_dataframe(ccxt_symbol, timeframe, limit)
 
 
-def load_candle_data(ccxt_symbol: str, timeframe: str, limit: int):
-    """Apply indicators on top of cached OHLCV (indicators are cheap CPU only)."""
-    df, err = cached_fetch_ohlcv(ccxt_symbol, timeframe, limit)
-    if err or df is None:
-        return None, err
-    df = add_emas(df)
-    df = add_basic_indicators(df)
-    return df, None
+def _load_chart_df(ccxt_symbol: str, timeframe: str, limit: int) -> tuple[pd.DataFrame | None, str | None, bool]:
+    """
+    Returns (df, error_message, used_stale).
+    During cooldown: no Binance requests; stale only if key matches.
+    """
+    key = (ccxt_symbol, timeframe, limit)
+    if is_in_cooldown():
+        stale_df, saved_at = get_stored_chart(ccxt_symbol, timeframe, limit)
+        if stale_df is not None and saved_at is not None:
+            label = saved_at.strftime("%H:%M:%S")
+            return stale_df, f"Showing cached data from {label}", True
+        return None, banner_message(), False
+
+    try:
+        raw = cached_ohlcv_df(ccxt_symbol, timeframe, limit)
+        df = add_basic_indicators(add_emas(raw))
+        save_stored_chart(ccxt_symbol, timeframe, limit, df)
+        return df, None, False
+    except BinanceCooldownActive:
+        stale_df, saved_at = get_stored_chart(ccxt_symbol, timeframe, limit)
+        if stale_df is not None and saved_at is not None:
+            label = saved_at.strftime("%H:%M:%S")
+            return stale_df, f"Showing cached data from {label}", True
+        return None, banner_message(), False
+    except DataFetchError as e:
+        if e.http_code in (418, 429):
+            stale_df, saved_at = get_stored_chart(ccxt_symbol, timeframe, limit)
+            if stale_df is not None and saved_at is not None:
+                label = saved_at.strftime("%H:%M:%S")
+                return stale_df, f"Showing cached data from {label}", True
+            return None, banner_message(), False
+        return None, e.message, False
+
+
+def _fetch_ticker_safe(ccxt_symbol: str) -> tuple[dict | None, str | None]:
+    if is_in_cooldown():
+        cached = st.session_state.get("last_ticker", {}).get(ccxt_symbol)
+        return cached, None
+    try:
+        t = cached_ticker_dict(ccxt_symbol)
+        st.session_state.setdefault("last_ticker", {})[ccxt_symbol] = t
+        return t, None
+    except BinanceCooldownActive:
+        cached = st.session_state.get("last_ticker", {}).get(ccxt_symbol)
+        return cached, None
+    except DataFetchError as e:
+        if e.http_code in (418, 429):
+            cached = st.session_state.get("last_ticker", {}).get(ccxt_symbol)
+            return cached, None
+        return None, e.message
 
 
 def format_volume(vol: float) -> str:
@@ -153,28 +155,46 @@ def metric_number(val) -> str:
     return f"{float(val):.2f}"
 
 
-# --- Sidebar ---
+def _format_price(ticker: dict | None, last_close: float) -> tuple[str, bool]:
+    """Return (label, from_candle)."""
+    if ticker and ticker.get("last"):
+        return f"{float(ticker['last']):,.4f}", False
+    return f"{last_close:,.4f} (from last candle)", True
+
+
+st.title("Crypto Scalper")
+_mode = "lightweight REST (cloud)" if _LIGHTWEIGHT else "ccxt"
+st.caption(f"Live Binance USDT-M futures chart — Phase 1 • data mode: {_mode}")
+
+if is_in_cooldown():
+    st.warning(f"⏳ {banner_message()}")
+
+# --- Sidebar (full page rerun only) ---
 with st.sidebar:
     st.header("Settings")
 
     if "fetch_coin_ranking" not in st.session_state:
         st.session_state["fetch_coin_ranking"] = False
 
-    if st.button(
-        "Load top 30 by volume (heavy API)",
-        use_container_width=True,
-        help="Skipped on cloud by default — calls fetch_tickers once per hour when enabled.",
-    ):
+    if st.button("Load top 30 by volume (heavy API)", use_container_width=True):
         st.session_state["fetch_coin_ranking"] = True
         cached_top_symbols.clear()
 
-    symbols, sym_err = cached_top_symbols(30, st.session_state["fetch_coin_ranking"])
-    symbols = list(symbols)
-    if sym_err and not is_rate_limit_message(sym_err):
+    try:
+        symbols = list(cached_top_symbols(30, st.session_state["fetch_coin_ranking"]))
+        sym_err = None
+    except (DataFetchError, BinanceCooldownActive) as e:
+        symbols = list(TOP_SYMBOLS_FALLBACK)
+        sym_err = getattr(e, "message", str(e))
+        if isinstance(e, BinanceCooldownActive):
+            sym_err = banner_message()
+
+    if sym_err and sym_err != banner_message():
         st.warning(sym_err)
-        _show_region_block_help(sym_err)
-    elif sym_err:
-        st.caption(sym_err)
+        if sym_err == region_block_user_message():
+            with st.expander("Why is Binance blocked?"):
+                st.markdown(region_block_help_markdown())
+
     if not symbols:
         symbols = list(TOP_SYMBOLS_FALLBACK)
 
@@ -185,87 +205,107 @@ with st.sidebar:
     timeframe = st.radio("Timeframe", ["5m", "15m", "1h"], index=1, horizontal=True)
     candle_limit = st.slider("Number of candles", min_value=100, max_value=1000, value=300, step=50)
 
-    # Default OFF on Render/shared IPs — user opts in to polling (min 60s).
     auto_refresh = st.toggle(
         "Auto-refresh",
-        value=False,
-        help="Leave off on cloud hosts to avoid Binance HTTP 418/429.",
+        value=True,
+        help="Price every 10s, chart every 60s. Turn off to pause API polling.",
     )
-    interval_labels = {"60s": 60_000, "120s": 120_000}
-    refresh_label = st.selectbox("Refresh interval", list(interval_labels.keys()), index=0)
-    refresh_ms = interval_labels[refresh_label]
 
-    analyze_clicked = st.button("Analyze", type="primary", use_container_width=True)
+    if st.button("Analyze", type="primary", use_container_width=True):
+        cached_ohlcv_df.clear()
+        cached_ticker_dict.clear()
 
-    if analyze_clicked:
-        cached_fetch_ohlcv.clear()
-        cached_ticker.clear()
+# Persist selections for fragments
+st.session_state["ccxt_symbol"] = ccxt_symbol
+st.session_state["timeframe"] = timeframe
+st.session_state["candle_limit"] = candle_limit
+st.session_state["auto_refresh"] = auto_refresh
 
-if auto_refresh:
-    st_autorefresh(interval=refresh_ms, key="price_autorefresh")
 
-chart_key = (ccxt_symbol, timeframe, candle_limit)
-df, candle_err = load_candle_data(ccxt_symbol, timeframe, candle_limit)
+def render_price_metrics() -> None:
+    """Top metric row — only /fapi/v1/ticker/24hr (weight 1)."""
+    sym = st.session_state["ccxt_symbol"]
+    tf = st.session_state["timeframe"]
+    lim = st.session_state["candle_limit"]
 
-if df is not None and not candle_err:
-    st.session_state["last_good_chart"] = df
-    st.session_state["last_good_chart_key"] = chart_key
+    stale_df, saved_at = get_stored_chart(sym, tf, lim)
+    last_close = float(stale_df.iloc[-1]["close"]) if stale_df is not None else 0.0
 
-_clear_rate_limit_if_ok(candle_err)
-
-if candle_err:
-    if is_rate_limit_message(candle_err):
-        stale = st.session_state.get("last_good_chart")
-        if stale is not None:
-            _show_rate_limit_banner(candle_err, show_stale_hint=True)
-            df, candle_err = stale, None
-        else:
-            _show_rate_limit_banner(candle_err)
-            st.stop()
+    ticker, _ = _fetch_ticker_safe(sym)
+    if last_close:
+        price_label, _ = _format_price(ticker, last_close)
+    elif ticker and ticker.get("last"):
+        price_label = f"{float(ticker['last']):,.4f}"
     else:
-        st.error(candle_err)
-        _show_region_block_help(candle_err)
-        st.stop()
+        price_label = "—"
 
-if df is None or df.empty:
-    st.error("No chart data available.")
-    st.stop()
+    if saved_at and is_in_cooldown():
+        st.caption(f"Showing cached data from {saved_at.strftime('%H:%M:%S')}")
 
-ticker, ticker_err = cached_ticker(ccxt_symbol)
-if ticker_err:
-    if not is_rate_limit_message(ticker_err):
-        st.warning(ticker_err)
-    ticker = {}
+    has_ticker = ticker is not None
+    change = f"{ticker['change_pct']:+.2f}%" if has_ticker else "—"
+    high = f"{ticker['high_24h']:,.4f}" if has_ticker else "—"
+    low = f"{ticker['low_24h']:,.4f}" if has_ticker else "—"
+    vol = format_volume(float(ticker["quote_volume_24h"])) if has_ticker else "—"
 
-last_row = df.iloc[-1]
-price = float(ticker.get("last") or last_row["close"])
-change_pct = float(ticker.get("change_pct", 0))
-rsi_val = last_row.get("rsi_14")
-atr_val = last_row.get("atr_14")
-atr_pct = (float(atr_val) / price * 100) if atr_val and price and not pd.isna(atr_val) else 0.0
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Current Price", price_label)
+    m2.metric("24h Change %", change)
+    m3.metric("24h High", high)
+    m4.metric("24h Low", low)
+    m5.metric("24h Volume", vol)
 
-m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-m1.metric("Current Price", f"{price:,.4f}")
-m2.metric("24h Change %", f"{change_pct:+.2f}%")
-m3.metric("24h High", f"{ticker.get('high_24h', 0):,.4f}")
-m4.metric("24h Low", f"{ticker.get('low_24h', 0):,.4f}")
-m5.metric("24h Volume", format_volume(float(ticker.get("quote_volume_24h", 0))))
-m6.metric("RSI (14)", metric_number(rsi_val))
-m7.metric("ATR (14) %", f"{atr_pct:.2f}%" if atr_pct else "—")
 
-chart_col, setup_col = st.columns([3, 1])
+def render_chart_block() -> None:
+    """Candles, indicators, and chart (heavier klines call)."""
+    sym = st.session_state["ccxt_symbol"]
+    tf = st.session_state["timeframe"]
+    lim = st.session_state["candle_limit"]
 
-with chart_col:
-    fig = build_chart(df, ccxt_symbol, timeframe)
-    st.plotly_chart(fig, use_container_width=True)
+    df, stale_msg, _ = _load_chart_df(sym, tf, lim)
+    if df is None or df.empty:
+        st.error(stale_msg or "No chart data available.")
+        return
 
-with setup_col:
-    st.subheader("Trade Setup")
-    st.info("Setup analysis coming in Phase 2.")
+    if stale_msg:
+        st.caption(stale_msg)
 
-still_forming = "yes" if not bool(last_row.get("is_closed", True)) else "no"
-updated = datetime.now(PAKISTAN_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
-st.caption(
-    f"Data: Binance USDT-M Futures • Last updated: {updated} • "
-    f"Last candle still forming: {still_forming}"
-)
+    last_row = df.iloc[-1]
+    rsi_val = last_row.get("rsi_14")
+    atr_val = last_row.get("atr_14")
+    price = float(last_row["close"])
+    atr_pct = (float(atr_val) / price * 100) if atr_val and not pd.isna(atr_val) else None
+
+    m6, m7 = st.columns(2)
+    m6.metric("RSI (14)", metric_number(rsi_val))
+    m7.metric("ATR (14) %", f"{atr_pct:.2f}%" if atr_pct is not None else "—")
+
+    chart_col, setup_col = st.columns([3, 1])
+    with chart_col:
+        fig = build_chart(df, sym, tf)
+        st.plotly_chart(fig, use_container_width=True, key=f"chart-{sym}-{tf}-{lim}")
+    with setup_col:
+        st.subheader("Trade Setup")
+        st.info("Setup analysis coming in Phase 2.")
+
+    still_forming = "yes" if not bool(last_row.get("is_closed", True)) else "no"
+    updated = datetime.now(PAKISTAN_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    st.caption(
+        f"Data: Binance USDT-M Futures • Last updated: {updated} • "
+        f"Last candle still forming: {still_forming}"
+    )
+
+
+def _invoke_fragment(callback, run_every: timedelta | None) -> None:
+    """Wrap callback in st.fragment with optional run_every polling."""
+    if run_every is not None:
+        st.fragment(run_every=run_every)(callback)()
+    else:
+        st.fragment(callback)()
+
+
+_price_every = timedelta(seconds=10) if st.session_state.get("auto_refresh", True) else None
+_chart_every = timedelta(seconds=60) if st.session_state.get("auto_refresh", True) else None
+
+_invoke_fragment(render_price_metrics, _price_every)
+_invoke_fragment(render_chart_block, _chart_every)

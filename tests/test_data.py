@@ -1,6 +1,8 @@
 """
 Quick sanity checks for Binance candle + ticker fetching.
-Run from project root: python tests/test_data.py
+Run from project root:
+  python tests/test_data.py
+  python tests/test_rate_limit.py
 """
 
 from __future__ import annotations

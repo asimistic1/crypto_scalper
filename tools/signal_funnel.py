@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.candle_store import get_many  # noqa: E402
-from core.config import HIGHER_TIMEFRAMES, MIN_24H_QUOTE_VOLUME_USDT  # noqa: E402
+from core.config import HIGHER_TIMEFRAMES, MIN_24H_QUOTE_VOLUME_USDT, SETUP_EXPIRY_CANDLES  # noqa: E402
 from core.exchange_info import price_precision, tick_size  # noqa: E402
 from core.models import Direction  # noqa: E402
 from core.security import validate_symbol_rest  # noqa: E402
@@ -27,6 +27,23 @@ from core.setup_builder import build_setup  # noqa: E402
 
 def _as_of_from_close_time(close_ms: int) -> datetime:
     return pd.to_datetime(close_ms, unit="ms", utc=True).to_pydatetime()
+
+
+def count_setup_episodes(
+    hits: list[tuple[int, Direction]],
+    *,
+    max_bar_gap: int = SETUP_EXPIRY_CANDLES,
+) -> int:
+    """Merge consecutive same-direction setups within max_bar_gap bars into one episode."""
+    if not hits:
+        return 0
+    episodes = 1
+    prev_i, prev_dir = hits[0]
+    for bi, d in hits[1:]:
+        if d != prev_dir or (bi - prev_i) > max_bar_gap:
+            episodes += 1
+        prev_i, prev_dir = bi, d
+    return episodes
 
 
 def _outcome_label(setup) -> str:
@@ -40,7 +57,13 @@ def _outcome_label(setup) -> str:
     return "NO_TRADE"
 
 
-def run_funnel(symbol: str, timeframe: str, *, walk_bars: int = 500) -> None:
+def run_funnel(
+    symbol: str,
+    timeframe: str,
+    *,
+    walk_bars: int = 500,
+    unique_episodes: bool = False,
+) -> None:
     ok, msg = validate_symbol_rest(symbol)
     if not ok:
         print(msg)
@@ -68,6 +91,7 @@ def run_funnel(symbol: str, timeframe: str, *, walk_bars: int = 500) -> None:
     start = max(0, n - walk_bars)
     counts: Counter[str] = Counter()
     scores: list[float] = []
+    setup_hits: list[tuple[int, Direction]] = []
     first_t: datetime | None = None
     last_t: datetime | None = None
 
@@ -92,6 +116,7 @@ def run_funnel(symbol: str, timeframe: str, *, walk_bars: int = 500) -> None:
         counts[key] += 1
         if setup.direction in (Direction.LONG, Direction.SHORT):
             scores.append(float(setup.score))
+            setup_hits.append((i, setup.direction))
 
     days = 1.0
     if first_t and last_t:
@@ -106,8 +131,12 @@ def run_funnel(symbol: str, timeframe: str, *, walk_bars: int = 500) -> None:
     for key, cnt in counts.most_common():
         print(f"  {cnt:5d}  {key}")
     print("-" * 60)
+    episodes = count_setup_episodes(setup_hits)
     print(f"  Setups (LONG+SHORT): {setups}")
     print(f"  Setups per day (approx): {setups / days:.2f}")
+    if unique_episodes:
+        print(f"  Episodes (unique, ≤{SETUP_EXPIRY_CANDLES} bars): {episodes}")
+        print(f"  Episodes per day (approx): {episodes / days:.2f}")
     print(f"  Average setup score: {avg_score:.1f}")
 
 
@@ -116,8 +145,13 @@ def main() -> None:
     parser.add_argument("symbol", help="REST symbol e.g. BTCUSDT")
     parser.add_argument("timeframe", choices=("5m", "15m", "1h"))
     parser.add_argument("--bars", type=int, default=500)
+    parser.add_argument(
+        "--unique",
+        action="store_true",
+        help="Also print setup episodes (deduped within SETUP_EXPIRY_CANDLES)",
+    )
     args = parser.parse_args()
-    run_funnel(args.symbol, args.timeframe, walk_bars=args.bars)
+    run_funnel(args.symbol, args.timeframe, walk_bars=args.bars, unique_episodes=args.unique)
 
 
 if __name__ == "__main__":

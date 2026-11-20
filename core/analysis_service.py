@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from core.config import HIGHER_TIMEFRAMES
-from core.exchange_info import binance_server_time_ms, tick_size
+from core.exchange_info import binance_server_time_ms, price_precision, tick_size
 from core.levels import find_swings, nearest_zones, structure_for_symbol, swings_confirmed_as_of
 from core.models import Direction, Setup
 from core.security import validate_symbol_rest
@@ -45,10 +45,50 @@ def _as_of_from_df(df: pd.DataFrame) -> datetime:
     return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
 
 
+def _fmt_zone_edge(price: float, prec: int) -> str:
+    return f"{price:,.{prec}f}"
+
+
+def _zone_payload(
+    zones: list,
+    *,
+    role: str,
+    prec: int,
+) -> list[dict[str, Any]]:
+    """Up to 3 zones, one label per unique near edge (R/S price × touches)."""
+    out: list[dict[str, Any]] = []
+    seen_edges: set[float] = set()
+    color = (
+        "rgba(14,203,129,0.22)" if role == "support" else "rgba(246,70,93,0.22)"
+    )
+    for z in zones:
+        if role == "support":
+            near = float(z.price_high)
+            prefix = "S"
+        else:
+            near = float(z.price_low)
+            prefix = "R"
+        edge_key = round(near, prec)
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+        out.append(
+            {
+                "from": float(z.price_low),
+                "to": float(z.price_high),
+                "near": near,
+                "color": color,
+                "label": f"{prefix} {_fmt_zone_edge(near, prec)} ×{z.touches}",
+            }
+        )
+    return out
+
+
 def _build_chart_overlays(
     ltf: pd.DataFrame,
     setup: Setup,
     as_of: datetime,
+    symbol: str,
     toggles: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     from core.indicators import add_all_indicators
@@ -65,24 +105,9 @@ def _build_chart_overlays(
     zone_payload: list[dict[str, Any]] = []
     if toggles.get("zones", True):
         below, above = nearest_zones(zones, price, 3)
-        for z in below:
-            zone_payload.append(
-                {
-                    "from": z.price_low,
-                    "to": z.price_high,
-                    "color": "rgba(14,203,129,0.35)",
-                    "label": f"Support ({z.touches})",
-                }
-            )
-        for z in above:
-            zone_payload.append(
-                {
-                    "from": z.price_low,
-                    "to": z.price_high,
-                    "color": "rgba(246,70,93,0.35)",
-                    "label": f"Resistance ({z.touches})",
-                }
-            )
+        prec = price_precision(symbol)
+        zone_payload.extend(_zone_payload(below, role="support", prec=prec))
+        zone_payload.extend(_zone_payload(above, role="resistance", prec=prec))
 
     markers: list[dict[str, Any]] = []
     if toggles.get("swings", True):
@@ -218,5 +243,5 @@ def run_analysis(
     if setup.direction != Direction.NO_TRADE:
         save_setup(setup)
 
-    overlays = _build_chart_overlays(ltf_df, setup, as_of, toggles)
+    overlays = _build_chart_overlays(ltf_df, setup, as_of, rest, toggles)
     return AnalysisResult(setup, overlays, diag, last_close_ms=last_close_ms)

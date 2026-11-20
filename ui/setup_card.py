@@ -67,7 +67,10 @@ def render_setup_card(
 ) -> None:
     """Right-hand setup panel."""
     st.markdown(f"### {_direction_badge(setup)}")
-    st.caption(f"{setup.strategy} · {setup.timeframe} · {_fmt_pk(setup.as_of)}")
+    if setup.direction == Direction.NO_TRADE or setup.strategy in ("none", ""):
+        st.caption(f"{setup.timeframe} · {_fmt_pk(setup.as_of)}")
+    else:
+        st.caption(f"{setup.strategy} · {setup.timeframe} · {_fmt_pk(setup.as_of)}")
 
     if live_status:
         st.info(f"Live chart status: **{live_status}**")

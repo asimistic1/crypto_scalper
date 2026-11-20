@@ -34,6 +34,7 @@
   let overlaySignature = "";
 
   let priceLineHandles = [];
+  let zoneBandSeries = [];
   let pendingPrice = null;
   let rafScheduled = false;
 
@@ -235,6 +236,27 @@
     });
   }
 
+  function refreshVwap() {
+    if (!vwapSeries || !candles.length) return;
+    const toggles = renderArgs.toggles || {};
+    if (toggles.vwap !== true) {
+      vwapSeries.applyOptions({ visible: false });
+      return;
+    }
+    vwapSeries.applyOptions({ visible: true });
+    const closes = candles.map((c) => c.close);
+    const vols = candles.map((c) => c.volume);
+    let cumPv = 0;
+    let cumV = 0;
+    const data = candles.map((c, i) => {
+      const tp = (c.high + c.low + closes[i]) / 3;
+      cumPv += tp * vols[i];
+      cumV += vols[i];
+      return { time: c.time, value: cumV ? cumPv / cumV : closes[i] };
+    });
+    vwapSeries.setData(data);
+  }
+
   function refreshEmaLines() {
     const toggles = renderArgs.toggles || {};
     const show = toggles.emas !== false;
@@ -256,6 +278,12 @@
       } catch (_) {}
     });
     priceLineHandles = [];
+    zoneBandSeries.forEach((s) => {
+      try {
+        chart.removeSeries(s);
+      } catch (_) {}
+    });
+    zoneBandSeries = [];
     if (riskAreaSeries) {
       riskAreaSeries.setData([]);
     }
@@ -335,24 +363,54 @@
       el("setup-badge").classList.add("hidden");
     }
 
-    if (toggles.zones !== false) {
+    if (toggles.zones !== false && candles.length) {
+      const ref = candles[candles.length - 1].close;
+      const usedLabels = new Set();
       zones.forEach((z) => {
         if (!Number.isFinite(z.from) || !Number.isFinite(z.to)) return;
-        const color = z.color || "rgba(14,203,129,0.45)";
+        const lo = Math.min(z.from, z.to);
+        const hi = Math.max(z.from, z.to);
+        const color = z.color || "rgba(14,203,129,0.25)";
+        const near =
+          Number.isFinite(z.near) ? z.near : Math.abs(ref - lo) <= Math.abs(ref - hi) ? lo : hi;
+        const far = near === lo ? hi : lo;
+        const lbl = (z.label || "").trim();
+        if (lbl && usedLabels.has(lbl)) return;
+        if (lbl) usedLabels.add(lbl);
+
+        const band = chart.addSeries(AreaSeries, {
+          topColor: color,
+          bottomColor: "rgba(0,0,0,0)",
+          lineColor: "rgba(0,0,0,0)",
+          lineWidth: 0,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        try {
+          band.applyOptions({ baseValue: { type: "price", price: lo } });
+        } catch (_) {}
+        band.setData(candles.map((c) => ({ time: c.time, value: hi })));
+        zoneBandSeries.push(band);
+
         priceLineHandles.push(
           candleSeries.createPriceLine({
-            price: Math.min(z.from, z.to),
-            color: color,
+            price: near,
+            color: color.replace("0.22", "0.55"),
             lineStyle: 2,
-            title: z.label || "Zone",
+            lineWidth: 1,
+            title: lbl,
+            axisLabelVisible: !!lbl,
           })
         );
         priceLineHandles.push(
           candleSeries.createPriceLine({
-            price: Math.max(z.from, z.to),
-            color: color,
+            price: far,
+            color: color.replace("0.22", "0.45"),
             lineStyle: 2,
-            title: " ",
+            lineWidth: 1,
+            title: "",
+            axisLabelVisible: false,
           })
         );
       });
@@ -372,24 +430,9 @@
       });
     }
 
-    if (toggles.vwap && vwapSeries) {
-      vwapSeries.applyOptions({ visible: true });
-      const closes = candles.map((c) => c.close);
-      const vols = candles.map((c) => c.volume);
-      let cumPv = 0,
-        cumV = 0;
-      const data = candles.map((c, i) => {
-        const tp = (c.high + c.low + closes[i]) / 3;
-        cumPv += tp * vols[i];
-        cumV += vols[i];
-        return { time: c.time, value: cumV ? cumPv / cumV : closes[i] };
-      });
-      vwapSeries.setData(data);
-    } else if (vwapSeries) {
-      vwapSeries.applyOptions({ visible: false });
-    }
+    refreshVwap();
 
-  const showMarkers =
+    const showMarkers =
       toggles.swings !== false || toggles.setup_lines !== false;
     if (showMarkers && markers.length) {
       candleSeries.setMarkers(
@@ -449,6 +492,20 @@
     const dir = pct >= 0 ? "above" : "below";
     el("entry-offset").textContent =
       "Price is " + Math.abs(pct).toFixed(2) + "% " + dir + " entry";
+  }
+
+  function emitCandleClosed(candleSec, closeMs) {
+    const nonce = Date.now() + "-candle_closed-" + closeMs;
+    if (nonce === lastEventNonce) return;
+    lastEventNonce = nonce;
+    setComponentValue({
+      event: "candle_closed",
+      symbol: currentSymbol,
+      timeframe: currentTf,
+      time: candleSec,
+      close_ms: closeMs,
+      nonce: nonce,
+    });
   }
 
   function emitComponentEvent(kind) {
@@ -536,6 +593,8 @@
     volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
     chart.priceScale("volume").applyOptions({
       scaleMargins: { top: 0.82, bottom: 0 },
@@ -674,7 +733,8 @@
     const c = klineToCandle(k);
     if (k.x === true && c.time !== lastClosedCandleTime) {
       lastClosedCandleTime = c.time;
-      emitComponentEvent("candle_closed");
+      const closeMs = k.T != null ? +k.T : c.time * 1000;
+      emitCandleClosed(c.time, closeMs);
     }
     if (!candles.length) {
       setCandles([c], true);
@@ -698,6 +758,7 @@
           : "rgba(246,70,93,0.5)",
     });
     refreshEmaLines();
+    refreshVwap();
     updateIndicators();
   }
 

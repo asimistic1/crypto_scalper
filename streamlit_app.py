@@ -52,6 +52,8 @@ def _init_session() -> None:
         "analysis_overlays": {},
         "analysis_diag": None,
         "last_analyzed_close_ms": 0,
+        "last_auto_analyzed_key": "",
+        "pending_candle_close_ms": 0,
         "last_analyze_ts": 0.0,
         "last_event_nonce": "",
         "last_chart_status": None,
@@ -91,6 +93,21 @@ def _record_analyze() -> None:
     st.session_state["last_analyze_ts"] = time.time()
 
 
+def _auto_analyze_key(rest: str, tf: str, close_ms: int) -> str:
+    return f"{rest}|{tf}|{close_ms}"
+
+
+def _auto_analyze_already_done(rest: str, tf: str, close_ms: int) -> bool:
+    if close_ms <= 0:
+        return False
+    return st.session_state.get("last_auto_analyzed_key") == _auto_analyze_key(rest, tf, close_ms)
+
+
+def _mark_auto_analyze(rest: str, tf: str, close_ms: int) -> None:
+    st.session_state["last_auto_analyzed_key"] = _auto_analyze_key(rest, tf, close_ms)
+    st.session_state["last_analyzed_close_ms"] = close_ms
+
+
 def _run_analysis(toggles: dict[str, bool]) -> None:
     from core.analysis_service import run_analysis
 
@@ -111,6 +128,7 @@ def _run_analysis(toggles: dict[str, bool]) -> None:
     st.session_state["analysis_overlays"] = result.overlays
     st.session_state["analysis_diag"] = result.diagnostics
     st.session_state["last_analyzed_close_ms"] = result.last_close_ms
+    _mark_auto_analyze(rest, tf, result.last_close_ms)
     st.session_state["analysis_context_key"] = f"{rest}|{tf}"
 
 
@@ -135,18 +153,28 @@ def _handle_chart_event(event: dict | None) -> str | None:
             st.session_state["last_chart_status"] = str(status)
         return None
     if kind == "candle_closed":
+        cm = int(event.get("close_ms") or 0)
+        if cm <= 0:
+            tsec = event.get("time")
+            if tsec:
+                cm = int(tsec) * 1000
+        st.session_state["pending_candle_close_ms"] = cm
         return "candle_closed"
     return None
 
 
 def _maybe_analyze(toggles: dict[str, bool], trigger: str | None) -> None:
     rest = display_to_rest(st.session_state["display_symbol"])
-    ctx = f"{rest}|{st.session_state['timeframe']}"
+    tf = st.session_state["timeframe"]
+    ctx = f"{rest}|{tf}"
     if ctx != st.session_state.get("analysis_context_key"):
         _run_analysis(toggles)
         _record_analyze()
         return
     if trigger == "candle_closed":
+        close_ms = int(st.session_state.get("pending_candle_close_ms") or 0)
+        if _auto_analyze_already_done(rest, tf, close_ms):
+            return
         _run_analysis(toggles)
         _record_analyze()
         return
@@ -155,8 +183,6 @@ def _maybe_analyze(toggles: dict[str, bool], trigger: str | None) -> None:
             _run_analysis(toggles)
             _record_analyze()
             st.session_state["analyze_requested"] = False
-        else:
-            st.toast(f"Analyze cooldown — wait {ANALYZE_DEBOUNCE_SECONDS}s", icon="⏳")
 
 
 _init_session()
@@ -303,8 +329,9 @@ def _missed_candle_guard_body() -> None:
         if res.df.empty:
             return
         last_ms = int(res.df["close_time"].iloc[-1])
-        prev = int(st.session_state.get("last_analyzed_close_ms", 0))
-        if last_ms > prev:
+        if _auto_analyze_already_done(rest, tf, last_ms):
+            return
+        if last_ms > int(st.session_state.get("last_analyzed_close_ms", 0)):
             toggles = {
                 "zones": True,
                 "swings": True,

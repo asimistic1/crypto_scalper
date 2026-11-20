@@ -9,8 +9,8 @@ import pandas as pd
 from backtest.paths import history_parquet
 from core.config import (
     ANALYSIS_CANDLES,
-    HTF_CANDLES,
     HIGHER_TIMEFRAMES,
+    HTF_CANDLES,
     MIN_24H_QUOTE_VOLUME_USDT,
 )
 from core.indicators import add_all_indicators

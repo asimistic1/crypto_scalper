@@ -28,9 +28,7 @@ def load_history(symbol: str, interval: str) -> pd.DataFrame:
 
 
 def ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    work = df.copy()
-    add_all_indicators(work)
-    return work
+    return add_all_indicators(df)
 
 
 def as_of_from_close_ms(close_ms: int) -> datetime:

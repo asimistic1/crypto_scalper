@@ -145,7 +145,8 @@ def generate_signals(
         if meta.get("cache_key") == key:
             return pd.read_parquet(out_path)
 
-    ltf = ensure_indicators(load_history(symbol, tf))
+    ltf = load_history(symbol, tf)
+    ltf = ensure_indicators(ltf)
     mask = candidate_mask(ltf)
     indices = [i for i in range(len(ltf)) if mask[i]]
     htf_cache: dict[str, pd.DataFrame] = {tf: ltf}

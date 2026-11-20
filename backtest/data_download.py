@@ -62,20 +62,20 @@ def month_range(end: datetime, months: int) -> list[MonthSpec]:
 def _monthly_kline_url(symbol: str, interval: str, spec: MonthSpec) -> tuple[str, str]:
     fname = f"{symbol}-{interval}-{spec.label()}.zip"
     base = f"{VISION_BASE}/monthly/klines/{symbol}/{interval}"
-    return f"{base}/{fname}", f"{fname}.CHECKSUM"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
 
 
 def _daily_kline_url(symbol: str, interval: str, day: datetime) -> tuple[str, str]:
     d = day.strftime("%Y-%m-%d")
     fname = f"{symbol}-{interval}-{d}.zip"
     base = f"{VISION_BASE}/daily/klines/{symbol}/{interval}"
-    return f"{base}/{fname}", f"{fname}.CHECKSUM"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
 
 
 def _monthly_funding_url(symbol: str, spec: MonthSpec) -> tuple[str, str]:
     fname = f"{symbol}-fundingRate-{spec.label()}.zip"
     base = f"{VISION_BASE}/monthly/fundingRate/{symbol}"
-    return f"{base}/{fname}", f"{fname}.CHECKSUM"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
 
 
 def _manifest_path(symbol: str, interval: str) -> Path:

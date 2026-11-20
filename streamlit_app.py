@@ -122,6 +122,12 @@ with st.sidebar:
         value=False,
         help="Phase 2 placeholder lines/zones — off by default.",
     )
+    st.markdown("**Chart layers**")
+    toggle_zones = st.checkbox("Support / resistance zones", value=True)
+    toggle_swings = st.checkbox("Swing markers", value=True)
+    toggle_emas = st.checkbox("EMAs", value=True)
+    toggle_vwap = st.checkbox("VWAP", value=False)
+    toggle_setup = st.checkbox("Setup lines", value=True)
 
 chart_col, setup_col = st.columns([4, 1])
 
@@ -147,8 +153,16 @@ if show_demo_overlays and fb_df is not None and not fb_df.empty:
         ],
     }
 
+chart_toggles = {
+    "zones": toggle_zones,
+    "swings": toggle_swings,
+    "emas": toggle_emas,
+    "vwap": toggle_vwap,
+    "setup_lines": toggle_setup,
+}
+
 with chart_col:
-    render_live_chart(
+    chart_event = render_live_chart(
         ccxt_symbol,
         timeframe,
         overlays=overlays,
@@ -156,7 +170,10 @@ with chart_col:
         fallback_candles=fb_df,
         history_limit=history_limit,
         streaming_enabled=live_stream,
+        toggles=chart_toggles,
     )
+    if chart_event:
+        st.session_state["last_chart_event"] = chart_event
 
 with setup_col:
     st.subheader("Trade Setup")

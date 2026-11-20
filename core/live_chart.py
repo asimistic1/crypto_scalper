@@ -1,33 +1,34 @@
 """
-Embed the browser-side Binance WebSocket chart (TradingView Lightweight Charts v5).
+Bidirectional Streamlit custom component — live Binance WebSocket chart.
+
+Uses declare_component so symbol/timeframe/overlays update without iframe reload.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import streamlit as st
+import streamlit.components.v1 as components
 
 from core.data import symbol_to_rest_id
+from core.models import Setup
 
-_COMPONENT_HTML = (
-    Path(__file__).resolve().parent.parent / "components" / "live_chart" / "live_chart.html"
-)
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "components" / "live_chart" / "frontend"
+_LIVE_CHART = components.declare_component("live_chart", path=str(_FRONTEND_DIR))
+
+# Stable iframe identity — do not change per rerun
+_COMPONENT_KEY = "live_chart"
 
 
-def _df_to_candle_payload(df: pd.DataFrame) -> list[dict[str, float | int]]:
-    """OHLCV list for the browser (UTC seconds for Lightweight Charts)."""
+def _df_to_candle_payload(df: pd.DataFrame | None) -> list[dict[str, float | int]]:
+    if df is None or df.empty:
+        return []
     rows: list[dict[str, float | int]] = []
     for _, row in df.iterrows():
         ts = row["time"]
-        if hasattr(ts, "timestamp"):
-            sec = int(ts.timestamp())
-        else:
-            sec = int(pd.Timestamp(ts).timestamp())
+        sec = int(ts.timestamp()) if hasattr(ts, "timestamp") else int(pd.Timestamp(ts).timestamp())
         rows.append(
             {
                 "time": sec,
@@ -41,74 +42,84 @@ def _df_to_candle_payload(df: pd.DataFrame) -> list[dict[str, float | int]]:
     return rows
 
 
-def build_chart_html(
-    symbol: str,
-    timeframe: str,
-    *,
-    overlays: dict[str, Any] | None = None,
-    height: int = 750,
-    fallback_candles: list[dict[str, Any]] | None = None,
-    history_limit: int = 1000,
-    streaming_enabled: bool = True,
-) -> str:
-    """Inject JSON config into the static HTML shell (stable except when params change)."""
-    template = _COMPONENT_HTML.read_text(encoding="utf-8")
-    rest = symbol_to_rest_id(symbol)
-    display = symbol.split(":")[0] if ":" in symbol else symbol
-
-    config = {
-        "restSymbol": rest,
-        "wsSymbol": rest.lower(),
-        "timeframe": timeframe,
-        "displaySymbol": display,
-        "height": height,
-        "overlays": overlays or {},
-        "fallbackCandles": fallback_candles or [],
-        "historyLimit": min(int(history_limit), 1000),
-        "streamingEnabled": streaming_enabled,
+def setup_to_overlay_dict(setup: Setup | None) -> dict[str, Any] | None:
+    """Map Setup dataclass → browser overlay payload."""
+    if setup is None or setup.direction.value == "NO_TRADE":
+        return None
+    return {
+        "direction": setup.direction.value,
+        "entry": setup.entry,
+        "sl": setup.stop_loss,
+        "tp1": setup.tp1,
+        "tp2": setup.tp2,
+        "tp3": setup.tp3,
+        "status": setup.status.value,
+        "setup_id": setup.setup_id,
+        "expires_at": setup.expires_at.isoformat() if setup.expires_at else None,
+        "signal_time": setup.signal_candle_time.isoformat(),
     }
-    safe_json = json.dumps(config).replace("</", "<\\/")
-    return template.replace("/*__INJECT_CONFIG__*/", f"window.__CHART_CONFIG__ = {safe_json};")
+
+
+def merge_overlays(
+    *,
+    setup: Setup | None = None,
+    lines: list[dict[str, Any]] | None = None,
+    zones: list[dict[str, Any]] | None = None,
+    markers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "setup": setup_to_overlay_dict(setup),
+        "lines": lines or [],
+        "zones": zones or [],
+        "markers": markers or [],
+    }
 
 
 def render_live_chart(
     symbol: str,
     timeframe: str,
+    *,
     overlays: dict[str, Any] | None = None,
     height: int = 750,
     fallback_candles: pd.DataFrame | None = None,
     history_limit: int = 1000,
     streaming_enabled: bool = True,
-) -> None:
+    tick_size: float = 0.0,
+    toggles: dict[str, bool] | None = None,
+) -> Any:
     """
-    Render the live WebSocket chart iframe.
-    Only rebuilds HTML when symbol, timeframe, overlays, or height change (avoids WS reset).
+    Render the chart component (constant key — WS stays connected).
+    Returns component events from the browser (candle_closed / status_changed), or None.
     """
-    fb = _df_to_candle_payload(fallback_candles) if fallback_candles is not None else None
-    # Key excludes volatile overlay prices so tiny price moves do not reset the WebSocket iframe.
-    overlay_sig = json.dumps(overlays or {}, sort_keys=True, default=str)
-    cache_payload = {
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "overlay_sig": overlay_sig,
-        "height": height,
-        "history_limit": history_limit,
-        "streaming_enabled": streaming_enabled,
+    rest = symbol_to_rest_id(symbol)
+    display = symbol.split(":")[0] if ":" in symbol else symbol
+    default_toggles = {
+        "zones": True,
+        "swings": True,
+        "emas": True,
+        "vwap": False,
+        "setup_lines": True,
     }
-    config_key = hashlib.sha256(json.dumps(cache_payload, sort_keys=True).encode()).hexdigest()
+    if toggles:
+        default_toggles.update(toggles)
 
-    if st.session_state.get("live_chart_key") != config_key:
-        st.session_state["live_chart_key"] = config_key
-        st.session_state["live_chart_html"] = build_chart_html(
-            symbol,
-            timeframe,
-            overlays=overlays,
-            height=height,
-            fallback_candles=fb,
-            history_limit=history_limit,
-            streaming_enabled=streaming_enabled,
-        )
+    return _LIVE_CHART(
+        symbol=rest,
+        display_symbol=display,
+        timeframe=timeframe,
+        tick_size=float(tick_size),
+        height=int(height),
+        history_limit=min(int(history_limit), 1000),
+        streaming_enabled=bool(streaming_enabled),
+        fallback_candles=_df_to_candle_payload(fallback_candles),
+        overlays=overlays or {},
+        toggles=default_toggles,
+        theme="dark",
+        key=_COMPONENT_KEY,
+        default=None,
+    )
 
-    html = st.session_state.get("live_chart_html", "")
-    # Extra padding for header + status row inside the component
-    st.components.v1.html(html, height=height + 100, scrolling=False)
+
+def render_live_chart_legacy_html(*_args: Any, **_kwargs: Any) -> None:
+    """Deprecated — Phase 2 uses declare_component (no st.components.v1.html)."""
+    raise RuntimeError("Use render_live_chart() — live_chart.html iframe path was removed in Step 8.")

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; connect-src https://fapi.binance.com wss://fstream.binance.com; style-src 'self' 'unsafe-inline';"
+    />
+    <title>Live Chart</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="chart.js" defer></script>
+  </head>
+  <body>
+    <div id="header">
+      <span id="status-dot"></span>
+      <span id="conn-text">Starting…</span>
+      <span id="latency"></span>
+      <span id="symbol"></span>
+      <span id="last-price">—</span>
+      <span id="setup-badge" class="setup-badge hidden"></span>
+      <span id="entry-offset"></span>
+      <div class="stat"><label>24h Change</label><span id="chg">—</span></div>
+      <div class="stat"><label>24h High</label><span id="hi">—</span></div>
+      <div class="stat"><label>24h Low</label><span id="lo">—</span></div>
+      <div class="stat"><label>24h Vol</label><span id="vol">—</span></div>
+      <div id="indicators">
+        <span>RSI(14): <b id="rsi">—</b></span>
+        <span>ATR(14): <b id="atr">—</b></span>
+      </div>
+    </div>
+    <div id="chart-wrap">
+      <div id="ema-legend"></div>
+      <div id="legend"></div>
+      <div id="chart-container"></div>
+    </div>
+  </body>
+</html>

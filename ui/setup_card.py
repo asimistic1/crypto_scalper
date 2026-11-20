@@ -37,15 +37,23 @@ def _htf_line(setup: Setup) -> str:
     return " · ".join(parts) if parts else "—"
 
 
-def _copy_line(setup: Setup, display_symbol: str) -> str:
+def _fmt_price(price: float, precision: int) -> str:
+    return f"{price:.{precision}f}"
+
+
+def _copy_line(setup: Setup, display_symbol: str, *, price_precision: int = 4) -> str:
     if setup.direction == Direction.NO_TRADE:
         return f"{display_symbol} {setup.timeframe} NO TRADE"
     et = setup.entry_type.value
+
+    def fp(p: float) -> str:
+        return _fmt_price(p, price_precision)
+
     return (
         f"{display_symbol} {setup.timeframe} {setup.direction.value} | "
-        f"Entry {setup.entry:.4f} ({et}) | "
-        f"SL {setup.stop_loss:.4f} ({setup.sl_pct:+.2f}%) | "
-        f"TP1 {setup.tp1:.4f} | TP2 {setup.tp2:.4f} | TP3 {setup.tp3:.4f} | "
+        f"Entry {fp(setup.entry)} ({et}) | "
+        f"SL {fp(setup.stop_loss)} ({setup.sl_pct:+.2f}%) | "
+        f"TP1 {fp(setup.tp1)} | TP2 {fp(setup.tp2)} | TP3 {fp(setup.tp3)} | "
         f"Net R:R TP1 {setup.net_rr[0]:.2f} | Score {setup.score:.0f}/100"
     )
 
@@ -54,6 +62,7 @@ def render_setup_card(
     setup: Setup,
     display_symbol: str,
     *,
+    price_precision: int = 4,
     live_status: str | None = None,
 ) -> None:
     """Right-hand setup panel."""
@@ -84,11 +93,14 @@ def render_setup_card(
                 st.caption(r)
         return
 
+    def fp(p: float) -> str:
+        return _fmt_price(p, price_precision)
+
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("Entry", f"{setup.entry:.4f}", f"{setup.entry_type.value}")
+        st.metric("Entry", fp(setup.entry), f"{setup.entry_type.value}")
     with c2:
-        st.metric("Stop", f"{setup.stop_loss:.4f}", f"{setup.sl_pct:.2f}%")
+        st.metric("Stop", fp(setup.stop_loss), f"{setup.sl_pct:.2f}%")
 
     tp_cols = st.columns(3)
     for col, label, tp, pct, rr in zip(
@@ -100,7 +112,7 @@ def render_setup_card(
         strict=True,
     ):
         with col:
-            st.metric(label, f"{tp:.4f}", f"{pct:.2f}% · net R {rr:.2f}")
+            st.metric(label, fp(tp), f"{pct:.2f}% · net R {rr:.2f}")
 
     st.progress(min(1.0, setup.score / 100.0), text=f"Setup Score {setup.score:.0f}/100")
     st.caption("Win confidence: available after Phase 4 (calibrated on historical results)")
@@ -139,4 +151,4 @@ def render_setup_card(
             }
         )
 
-    st.text_area("Copy summary", value=_copy_line(setup, display_symbol), height=68)
+    st.text_area("Copy summary", value=_copy_line(setup, display_symbol, price_precision=price_precision), height=68)

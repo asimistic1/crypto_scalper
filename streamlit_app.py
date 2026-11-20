@@ -215,7 +215,7 @@ def chart_and_setup_panel() -> None:
 
 def _chart_and_setup_panel_body() -> None:
     from core.candle_store import get_closed_candles
-    from core.exchange_info import tick_size
+    from core.exchange_info import price_precision, tick_size
     from core.live_chart import render_live_chart
 
     toggles = chart_toggles
@@ -257,6 +257,7 @@ def _chart_and_setup_panel_body() -> None:
             render_setup_card(
                 setup,
                 display_symbol,
+                price_precision=price_precision(rest),
                 live_status=st.session_state.get("last_chart_status"),
             )
         else:

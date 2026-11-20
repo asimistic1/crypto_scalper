@@ -55,7 +55,19 @@ def _period_ms(tf: str) -> int:
 
 def _klines_to_df(raw: list) -> pd.DataFrame:
     if not raw:
-        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume", "close_time"])
+        return pd.DataFrame(
+            columns=[
+                "time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "taker_buy_quote_volume",
+            ]
+        )
     arr = np.asarray(raw, dtype=object)
     open_times = arr[:, 0].astype(np.int64)
     closes = arr[:, 4].astype(np.float64)
@@ -68,6 +80,8 @@ def _klines_to_df(raw: list) -> pd.DataFrame:
             "close": closes,
             "volume": arr[:, 5].astype(np.float64),
             "close_time": arr[:, 6].astype(np.int64),
+            "quote_volume": arr[:, 7].astype(np.float64),
+            "taker_buy_quote_volume": arr[:, 10].astype(np.float64),
         }
     )
     return df

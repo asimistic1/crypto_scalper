@@ -75,8 +75,9 @@ class SwingConfirmationTests(unittest.TestCase):
         df.loc[35, "low"] = 8.1
         swings = find_swings(df)
         atr = 1.0
-        z1 = build_zones(swings, atr)
-        z2 = build_zones(swings, atr)
+        ref = float(df.iloc[-1]["close"])
+        z1 = build_zones(swings, atr, reference_price=ref, df=df, as_of=df["time"].iloc[-1].to_pydatetime())
+        z2 = build_zones(swings, atr, reference_price=ref, df=df, as_of=df["time"].iloc[-1].to_pydatetime())
         self.assertEqual(len(z1), len(z2))
         for a, b in zip(z1, z2, strict=True):
             self.assertEqual(a.mid, b.mid)

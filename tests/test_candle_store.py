@@ -19,8 +19,18 @@ from core.candle_store import _drop_unclosed, _integrity_ok, _klines_to_df, get_
 from core.rate_limit import BinanceCooldownActive, enter_cooldown, reset_for_tests as reset_rl
 
 
-def _make_kline(open_ms: int, close_ms: int, close: float) -> list:
-    return [open_ms, close, close, close, close, 100.0, close_ms, 0, 0, 0, 0, 0]
+def _make_kline(open_ms: int, close_ms: int, close: float, quote_vol: float = 5000.0, taker_buy_q: float = 2500.0) -> list:
+    return [open_ms, close, close, close, close, 100.0, close_ms, quote_vol, 0, 0, taker_buy_q, 0]
+
+
+class KlinesToDfTests(unittest.TestCase):
+    def test_quote_volume_columns(self) -> None:
+        rows = [_make_kline(0, 899_999, 100.0, quote_vol=12345.6, taker_buy_q=6789.0)]
+        df = _klines_to_df(rows)
+        self.assertIn("quote_volume", df.columns)
+        self.assertIn("taker_buy_quote_volume", df.columns)
+        self.assertAlmostEqual(float(df["quote_volume"].iloc[0]), 12345.6)
+        self.assertAlmostEqual(float(df["taker_buy_quote_volume"].iloc[0]), 6789.0)
 
 
 class CandleStoreTests(unittest.TestCase):

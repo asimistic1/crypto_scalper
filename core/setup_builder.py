@@ -119,21 +119,78 @@ def _in_range_chop(close: float, zones: list[Zone], atr: float, df: pd.DataFrame
     return not near
 
 
-def _invalidation_low(
+def _swings_in_lookback(swings, ltf: pd.DataFrame, lookback: int = 50):
+    if ltf.empty or not swings:
+        return list(swings)
+    cut = pd.to_datetime(ltf["time"].iloc[max(0, len(ltf) - lookback)], utc=True)
+    out = []
+    for s in swings:
+        pt = pd.Timestamp(s.pivot_time)
+        if pt.tzinfo is None:
+            pt = pt.tz_localize("UTC")
+        else:
+            pt = pt.tz_convert("UTC")
+        if pt >= cut:
+            out.append(s)
+    return out or list(swings)
+
+
+def _invalidation_level(
     swings,
     zones: list[Zone],
     entry: float,
     direction: Direction,
+    ltf: pd.DataFrame,
+    lookback: int = 50,
 ) -> float | None:
+    """
+    Nearest structure level that invalidates the trade (not the farthest historical pivot).
+    LONG → highest swing low / support low still below entry.
+    SHORT → lowest swing high / resistance high still above entry.
+    """
+    use_swings = _swings_in_lookback(swings, ltf, lookback)
     if direction == Direction.LONG:
-        lows = [s.price for s in swings if s.kind == "low" and s.price < entry]
-        zlows = [z.price_low for z in zones if z.role == "support" and z.mid < entry]
+        lows = [s.price for s in use_swings if s.kind == "low" and s.price < entry]
+        zlows = [z.price_low for z in zones if z.role == "support" and z.price_high < entry]
         candidates = lows + zlows
-        return min(candidates) if candidates else None
-    highs = [s.price for s in swings if s.kind == "high" and s.price > entry]
-    zhighs = [z.price_high for z in zones if z.role == "resistance" and z.mid > entry]
+        return max(candidates) if candidates else None
+    highs = [s.price for s in use_swings if s.kind == "high" and s.price > entry]
+    zhighs = [z.price_high for z in zones if z.role == "resistance" and z.price_low > entry]
     candidates = highs + zhighs
-    return max(candidates) if candidates else None
+    return min(candidates) if candidates else None
+
+
+def _stop_loss_from_invalidation(
+    direction: Direction,
+    entry: float,
+    inv: float,
+    atr: float,
+    tick: Decimal,
+) -> tuple[float, float] | None:
+    """Return (stop_loss, risk) after buffer, min-risk widen, and max-risk cap."""
+    costs = _costs_usd_per_unit(entry)
+    min_risk = max(SL_MIN_ATR * atr, MIN_SL_VS_COSTS * costs)
+    if direction == Direction.LONG:
+        sl_raw = inv - SL_BUFFER_ATR * atr
+        risk = entry - sl_raw
+        if risk < min_risk:
+            sl_raw = entry - min_risk
+            risk = min_risk
+        if risk > SL_MAX_ATR * atr:
+            return None
+        sl = _round_price(sl_raw, tick, "down")
+        risk = entry - sl
+        return sl, risk
+    sl_raw = inv + SL_BUFFER_ATR * atr
+    risk = sl_raw - entry
+    if risk < min_risk:
+        sl_raw = entry + min_risk
+        risk = min_risk
+    if risk > SL_MAX_ATR * atr:
+        return None
+    sl = _round_price(sl_raw, tick, "up")
+    risk = sl - entry
+    return sl, risk
 
 
 def _pick_limit_entry(
@@ -158,6 +215,27 @@ def _pick_limit_entry(
     return close, EntryType.MARKET, None
 
 
+def _net_rr_tp1(direction: Direction, entry: float, sl: float, tp: float) -> float:
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return 0.0
+    reward = (tp - entry) if direction == Direction.LONG else (entry - tp)
+    costs = _costs_usd_per_unit(entry)
+    return (reward - costs) / (risk + costs) if (risk + costs) > 0 else 0.0
+
+
+def _min_tp_price(direction: Direction, entry: float, sl: float) -> float:
+    """Smallest TP price that clears MIN_NET_RR_TP1 after costs (binary search-ish)."""
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return entry
+    costs = _costs_usd_per_unit(entry)
+    needed = MIN_NET_RR_TP1 * (risk + costs) + costs
+    if direction == Direction.LONG:
+        return entry + needed
+    return entry - needed
+
+
 def _take_profits(
     direction: Direction,
     entry: float,
@@ -167,36 +245,79 @@ def _take_profits(
     tick: Decimal,
 ) -> tuple[float, float, float, tuple[str, str, str]]:
     risk = abs(entry - sl)
-    _, above = nearest_zones(zones, entry, 10)
-    below, _ = nearest_zones(zones, entry, 10)
-
-    levels: list[float] = []
-    labels: list[str] = []
-    if direction == Direction.LONG:
-        opposites = [z for z in above if z.mid > entry]
-        opposites.sort(key=lambda z: z.mid)
-        for z in opposites[:3]:
-            levels.append(z.price_low)
-            labels.append(f"resistance {z.price_low:.2f}")
-    else:
-        opposites = [z for z in below if z.mid < entry]
-        opposites.sort(key=lambda z: -z.mid)
-        for z in opposites[:3]:
-            levels.append(z.price_high)
-            labels.append(f"support {z.price_high:.2f}")
-
+    min_tp = _min_tp_price(direction, entry, sl)
     round_tp = "down" if direction == Direction.LONG else "up"
-    while len(levels) < 3:
-        r = FALLBACK_TP_R[len(levels)]
-        if direction == Direction.LONG:
-            raw = entry + r * risk
-        else:
-            raw = entry - r * risk
-        levels.append(raw)
-        labels.append(f"fallback {r}R")
 
-    tps = tuple(_round_price(p, tick, round_tp) for p in levels[:3])
-    return tps[0], tps[1], tps[2], (labels[0], labels[1], labels[2])
+    candidates: list[tuple[float, str]] = []
+    _, above = nearest_zones(zones, entry, 20)
+    below, _ = nearest_zones(zones, entry, 20)
+
+    if direction == Direction.LONG:
+        for z in sorted(above, key=lambda x: x.mid):
+            tp = z.price_low
+            if tp <= min_tp:
+                continue
+            if _net_rr_tp1(direction, entry, sl, tp) >= MIN_NET_RR_TP1:
+                candidates.append((tp, f"resistance {tp:.2f}"))
+    else:
+        for z in sorted(below, key=lambda x: -x.mid):
+            tp = z.price_high
+            if tp >= min_tp:
+                continue
+            if _net_rr_tp1(direction, entry, sl, tp) >= MIN_NET_RR_TP1:
+                candidates.append((tp, f"support {tp:.2f}"))
+
+    for r in FALLBACK_TP_R:
+        raw = entry + r * risk if direction == Direction.LONG else entry - r * risk
+        if direction == Direction.LONG and raw > min_tp and _net_rr_tp1(direction, entry, sl, raw) >= MIN_NET_RR_TP1:
+            candidates.append((raw, f"fallback {r}R"))
+        elif direction == Direction.SHORT and raw < min_tp and _net_rr_tp1(direction, entry, sl, raw) >= MIN_NET_RR_TP1:
+            candidates.append((raw, f"fallback {r}R"))
+
+    if direction == Direction.LONG:
+        candidates.sort(key=lambda x: x[0])
+    else:
+        candidates.sort(key=lambda x: -x[0])
+
+    deduped: list[tuple[float, str]] = []
+    dedupe_dist = 0.25 * risk
+    for price, label in candidates:
+        if deduped and abs(price - deduped[-1][0]) < dedupe_dist:
+            continue
+        deduped.append((price, label))
+        if len(deduped) >= 3:
+            break
+
+    r_step = 0.5
+    r_try = 1.0
+    while len(deduped) < 3:
+        raw = entry + r_try * risk if direction == Direction.LONG else entry - r_try * risk
+        far_enough = not any(abs(raw - x[0]) < dedupe_dist for x in deduped)
+        dir_ok = (direction == Direction.LONG and raw > min_tp) or (
+            direction == Direction.SHORT and raw < min_tp
+        )
+        if dir_ok and far_enough:
+            if not deduped:
+                if _net_rr_tp1(direction, entry, sl, raw) >= MIN_NET_RR_TP1:
+                    deduped.append((raw, f"fallback {r_try}R"))
+            else:
+                last = deduped[-1][0]
+                if (direction == Direction.LONG and raw > last) or (direction == Direction.SHORT and raw < last):
+                    deduped.append((raw, f"fallback {r_try}R"))
+        r_try += r_step
+        if r_try > 12:
+            break
+
+    paired = sorted(deduped[:3], key=lambda x: x[0], reverse=(direction == Direction.SHORT))
+    levels = [_round_price(p, tick, round_tp) for p, _ in paired]
+    labels = tuple(l for _, l in paired)
+    if direction == Direction.LONG:
+        order = sorted(range(3), key=lambda i: levels[i])
+    else:
+        order = sorted(range(3), key=lambda i: -levels[i])
+    levels = [levels[i] for i in order]
+    labels = tuple(labels[i] for i in order)
+    return levels[0], levels[1], levels[2], labels
 
 
 def _costs_usd_per_unit(entry: float) -> float:
@@ -249,11 +370,10 @@ def _score_setup(
     direction: Direction,
     row: pd.Series,
     htf: dict,
-    strategy_reasons: tuple[str, ...],
+    cand,
     net_rr: tuple[float, float, float],
     atr_pct: float,
     timeframe: str,
-    zone_label: str | None,
     opposing_penalty: float,
 ) -> tuple[float, ScoreBreakdown, list[str]]:
     w = SCORE_WEIGHTS
@@ -282,16 +402,32 @@ def _score_setup(
             htf_s = 0.0
             reasons.append("✖ HTF bullish present")
 
-    level_s = float(w.level_quality) * 0.7 if zone_label else float(w.level_quality) * 0.4
-    reasons.append("✔ Level context" if zone_label else "⚠ No limit zone edge")
+    rz = cand.reacted_zone
+    if rz and rz.touches >= 2:
+        level_s = float(w.level_quality) * min(1.0, rz.strength / 3.0)
+        reasons.append(f"✔ Level strength {rz.strength:.1f} ({rz.touches} touches)")
+    elif cand.reaction_source == "zone" and rz:
+        level_s = float(w.level_quality) * 0.75
+        reasons.append("✔ Zone reaction")
+    elif cand.reaction_source in ("ema21", "vwap"):
+        level_s = float(w.level_quality) * 0.5
+        reasons.append(f"⚠ Pullback to {cand.reaction_source.upper()}")
+    else:
+        level_s = float(w.level_quality) * 0.35
+        reasons.append("⚠ Weak level context")
 
     rsi = float(row["rsi_14"])
-    if direction == Direction.LONG and 45 <= rsi <= 60:
+    prev_rsi = float(row.get("rsi_prev", rsi))
+    if "rsi_prev" not in row.index and len(row):
+        prev_rsi = rsi
+    mom_ok = False
+    if direction == Direction.LONG and 40 <= rsi <= 55 and rsi > prev_rsi:
+        mom_ok = True
+    elif direction == Direction.SHORT and 45 <= rsi <= 60 and rsi < prev_rsi:
+        mom_ok = True
+    if mom_ok:
         mom = float(w.momentum)
-        reasons.append(f"✔ RSI {rsi:.1f} momentum")
-    elif direction == Direction.SHORT and 40 <= rsi <= 55:
-        mom = float(w.momentum)
-        reasons.append(f"✔ RSI {rsi:.1f} momentum")
+        reasons.append(f"✔ RSI {rsi:.1f} in strategy band")
     else:
         mom = float(w.momentum) * 0.45
         reasons.append(f"⚠ RSI {rsi:.1f} outside ideal band")
@@ -307,9 +443,8 @@ def _score_setup(
         vol = float(w.volume) * 0.3
         reasons.append(f"✖ volume_ratio {vr:.2f}")
 
-    conf_lines = [r for r in strategy_reasons if "confirmation" in r.lower()]
-    candle = float(w.candle_confirmation) if conf_lines else float(w.candle_confirmation) * 0.4
-    reasons.append(conf_lines[0] if conf_lines else "⚠ Weak candle confirmation")
+    candle = float(w.candle_confirmation) if cand.confirmation_candle else float(w.candle_confirmation) * 0.4
+    reasons.append("✔ Candle confirmation" if cand.confirmation_candle else "⚠ Weak candle confirmation")
 
     n1 = net_rr[0]
     if n1 >= 2.0:
@@ -438,28 +573,17 @@ def build_setup(
     else:
         entry = _round_price(close, tick, round_entry)
 
-    inv = _invalidation_low(swings, zones, entry, direction)
+    inv = _invalidation_level(swings, zones, entry, direction, ltf)
     if inv is None:
         return no_trade(symbol, timeframe, ("✖ No invalidation structure for stop",), as_of)
 
-    if direction == Direction.LONG:
-        sl_raw = inv - SL_BUFFER_ATR * atr
-        sl = _round_price(sl_raw, tick, "down")
-        risk = entry - sl
-    else:
-        sl_raw = inv + SL_BUFFER_ATR * atr
-        sl = _round_price(sl_raw, tick, "up")
-        risk = sl - entry
-
-    if risk < SL_MIN_ATR * atr or risk > SL_MAX_ATR * atr:
+    sl_risk = _stop_loss_from_invalidation(direction, entry, inv, atr, tick)
+    if sl_risk is None:
         return no_trade(symbol, timeframe, ("✖ Stop distance does not fit ATR band",), as_of)
+    sl, risk = sl_risk
 
     tp1, tp2, tp3, tp_labels = _take_profits(direction, entry, sl, zones, atr, tick)
     gross_rr, net_rr, sl_pct = _rr_triple(direction, entry, sl, (tp1, tp2, tp3))
-
-    costs = _costs_usd_per_unit(entry)
-    if risk < MIN_SL_VS_COSTS * costs:
-        return no_trade(symbol, timeframe, ("✖ Stop smaller than fee/slippage floor",), as_of)
 
     if net_rr[0] < MIN_NET_RR_TP1:
         return no_trade(symbol, timeframe, (f"✖ TP1 net R:R {net_rr[0]:.2f} < {MIN_NET_RR_TP1}",), as_of)
@@ -469,15 +593,18 @@ def build_setup(
     if opposing and net_rr[0] < MIN_NET_RR_TP1 * 1.05:
         return no_trade(symbol, timeframe, ("✖ Strong opposing zone before TP1",), as_of)
 
+    prev = ltf.iloc[-2] if len(ltf) >= 2 else row
+    row_sc = row.copy()
+    if "rsi_14" in prev.index:
+        row_sc["rsi_prev"] = float(prev["rsi_14"])
     score, breakdown, score_reasons = _score_setup(
         direction,
-        row,
+        row_sc,
         htf_trend_map,
-        cand.reasons,
+        cand,
         net_rr,
         atr_pct,
         timeframe,
-        zone_label,
         opp_penalty,
     )
 

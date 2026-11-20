@@ -73,12 +73,16 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
                 "✔ HTF not bearish",
                 f"✔ volume_ratio {vol:.2f}",
             )
+            conf = float(cur["close"]) > float(cur["open"])
             return StrategyCandidate(
                 Direction.LONG,
                 "breakout_retest",
                 sig_time,
                 reasons,
                 vol * 20.0,
+                confirmation_candle=conf,
+                reacted_zone=zone,
+                reaction_source="zone",
             )
 
     if htf_not_bullish(ctx.htf_trends):
@@ -91,11 +95,15 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
                 "✔ HTF not bullish",
                 f"✔ volume_ratio {vol:.2f}",
             )
+            conf = float(cur["close"]) < float(cur["open"])
             return StrategyCandidate(
                 Direction.SHORT,
                 "breakout_retest",
                 sig_time,
                 reasons,
                 vol * 20.0,
+                confirmation_candle=conf,
+                reacted_zone=zone,
+                reaction_source="zone",
             )
     return None

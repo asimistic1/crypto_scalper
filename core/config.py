@@ -18,7 +18,7 @@ HIGHER_TIMEFRAMES: Mapping[str, tuple[str, ...]] = {
 }
 
 ANALYSIS_CANDLES = 1000
-HTF_CANDLES = 300
+HTF_CANDLES = 1000
 
 # --- Fees & slippage (per side; round-trip = 2× taker + 2× slippage) ---
 TAKER_FEE = 0.0005

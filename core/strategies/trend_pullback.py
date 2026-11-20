@@ -51,6 +51,25 @@ def _pullback_short(df, zones, n: int = 3) -> bool:
     return False
 
 
+def _reaction_meta(df, zones, n: int = 3):
+    sup = support_zones(zones)
+    res = resistance_zones(zones)
+    tail = df.iloc[-n:]
+    for _, row in tail.iterrows():
+        z = touched_support(row, sup)
+        if z:
+            return "zone", z
+        z = touched_resistance(row, res)
+        if z:
+            return "zone", z
+        if row["low"] <= row["ema_21"] <= row["high"]:
+            return "ema21", None
+        vwap = row.get("vwap_daily")
+        if pd.notna(vwap) and row["low"] <= float(vwap) <= row["high"]:
+            return "vwap", None
+    return "none", None
+
+
 def detect(ctx: StrategyContext) -> StrategyCandidate | None:
     df = closed_df_at(ctx.df, ctx.as_of)
     if len(df) < 5:
@@ -82,12 +101,16 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
                 pick = rsi + float(cur["volume_ratio"]) * 10.0
                 t = cur["time"]
                 sig_time = t.to_pydatetime() if hasattr(t, "to_pydatetime") else t
+                src, rz = _reaction_meta(df, ctx.zones)
                 return StrategyCandidate(
                     Direction.LONG,
                     "trend_pullback",
                     sig_time,
                     tuple(reasons),
                     pick,
+                    confirmation_candle=bool(conf),
+                    reacted_zone=rz,
+                    reaction_source=src,
                 )
 
     if htf_allows_short(ctx.htf_trends):
@@ -108,11 +131,15 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
                 pick = (100.0 - rsi) + float(cur["volume_ratio"]) * 10.0
                 t = cur["time"]
                 sig_time = t.to_pydatetime() if hasattr(t, "to_pydatetime") else t
+                src, rz = _reaction_meta(df, ctx.zones)
                 return StrategyCandidate(
                     Direction.SHORT,
                     "trend_pullback",
                     sig_time,
                     tuple(reasons),
                     pick,
+                    confirmation_candle=bool(conf),
+                    reacted_zone=rz,
+                    reaction_source=src,
                 )
     return None

@@ -116,28 +116,45 @@ def _decay_weight(candles_ago: float, half_life: float) -> float:
     return 0.5 ** (candles_ago / half_life)
 
 
+def _bar_index_at_or_before(df: pd.DataFrame, ts: datetime) -> int:
+    times = pd.to_datetime(df["time"], utc=True)
+    pt = pd.Timestamp(_aware(ts))
+    if pt.tzinfo is None:
+        pt = pt.tz_localize("UTC")
+    else:
+        pt = pt.tz_convert("UTC")
+    mask = times <= pt
+    if not mask.any():
+        return 0
+    return int(mask.to_numpy().nonzero()[0][-1])
+
+
 def build_zones(
     swings: Sequence[Swing],
     atr: float,
+    *,
+    reference_price: float,
+    df: pd.DataFrame,
+    as_of: datetime,
     tolerance_atr: float = SR_ZONE_TOLERANCE_ATR,
-    as_of: datetime | None = None,
-    last_bar_time: datetime | None = None,
     half_life: float = ZONE_RECENCY_HALF_LIFE_CANDLES,
 ) -> list[Zone]:
     """
-    Cluster pivot prices into zones (support from lows, resistance from highs).
-    strength = touch count weighted by recency + flip bonus when role changes.
+    Cluster pivots into zones. Role vs reference_price: above = resistance, below = support.
+    Recency uses bar indices (as_of index − pivot index).
     """
-    if atr <= 0 or not swings:
+    if atr <= 0 or not swings or df.empty:
         return []
 
+    as_of = _aware(as_of)
+    as_of_idx = _bar_index_at_or_before(df, as_of)
     tol = tolerance_atr * atr
     by_kind: dict[str, list[Swing]] = {"high": [], "low": []}
     for s in swings:
         by_kind[s.kind].append(s)
 
     zones: list[Zone] = []
-    for kind, role_base in (("low", "support"), ("high", "resistance")):
+    for kind, pivot_role in (("low", "support"), ("high", "resistance")):
         pivots = sorted(by_kind[kind], key=lambda s: s.price)
         if not pivots:
             continue
@@ -160,19 +177,16 @@ def build_zones(
             touches = len(cluster)
             last_touch = max(cluster, key=lambda s: s.pivot_time).pivot_time
 
-            ordered = sorted(cluster, key=lambda s: s.pivot_time)
-            n_cl = len(ordered)
-            weighted = sum(_decay_weight(n_cl - 1 - r, half_life) for r in range(n_cl))
-            flip_bonus = 0.0
+            weighted = 0.0
+            for s in cluster:
+                pivot_idx = _bar_index_at_or_before(df, s.pivot_time)
+                candles_ago = max(0, as_of_idx - pivot_idx)
+                weighted += _decay_weight(float(candles_ago), half_life)
 
-            # Role flip: if both highs and lows touched similar band → weakened role flip signal
-            opposite = "high" if kind == "low" else "low"
-            for s in by_kind[opposite]:
-                if low_p - tol <= s.price <= high_p + tol:
-                    flip_bonus += 0.35
-                    break
+            role = "resistance" if mid > reference_price else "support"
+            flipped = role != pivot_role
 
-            strength = weighted + flip_bonus
+            strength = weighted + (0.35 if flipped else 0.0)
             zones.append(
                 Zone(
                     price_low=low_p,
@@ -181,7 +195,8 @@ def build_zones(
                     touches=touches,
                     last_touch_time=_aware(last_touch),
                     strength=float(strength),
-                    role=role_base,
+                    role=role,
+                    flipped=flipped,
                 )
             )
 
@@ -306,9 +321,14 @@ def structure_for_symbol(
         zones = extra_levels(df, df_1d, as_of, atr) if df_1d is not None or "vwap_daily" in df.columns else []
         return [], zones
 
-    last_idx = _last_index_at_or_before(df, as_of)
-    last_bar_time = _row_time(df["time"], last_idx) if last_idx is not None else as_of
-    zones = build_zones(swings, atr, as_of=as_of, last_bar_time=last_bar_time)
+    close = float(df.iloc[_last_index_at_or_before(df, as_of) or -1]["close"])
+    zones = build_zones(
+        swings,
+        atr,
+        reference_price=close,
+        df=df,
+        as_of=as_of,
+    )
     zones = sorted(zones + extra_levels(df, df_1d, as_of, atr), key=lambda z: z.mid)
     return swings, zones
 

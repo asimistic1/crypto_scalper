@@ -168,7 +168,13 @@ def run_analysis(
         return AnalysisResult(nt, {}, AnalysisDiagnostics(errors=(str(exc),)))
 
     diag.fetch_ms = (time.perf_counter() - t0) * 1000.0
-    for fr in frames.values():
+    for tf, fr in frames.items():
+        if fr.stale:
+            return AnalysisResult(
+                no_trade(display_symbol, timeframe, (f"✖ Stale market data ({tf})",), datetime.now(UTC)),
+                {},
+                diag,
+            )
         if fr.from_cache:
             diag.cache_hits += 1
         else:

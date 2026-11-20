@@ -32,3 +32,6 @@ class StrategyCandidate:
     signal_candle_time: datetime
     reasons: tuple[str, ...]
     pick_score: float  # tie-break when two strategies agree on direction
+    confirmation_candle: bool = False
+    reacted_zone: Zone | None = None
+    reaction_source: str = "none"  # zone | ema21 | vwap

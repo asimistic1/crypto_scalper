@@ -25,22 +25,22 @@ def prev_row(df: pd.DataFrame) -> pd.Series | None:
 
 
 def htf_allows_long(htf: dict[str, TrendResult]) -> bool:
-    """Both bullish, or one bullish + one neutral — never bearish."""
+    """Trend pullback: ≥1 bullish HTF and no bearish (all-neutral is not enough)."""
     if not htf:
-        return True
+        return False
     vals = [t.bias for t in htf.values()]
     if any(v == TrendBias.BEARISH for v in vals):
         return False
-    return any(v == TrendBias.BULLISH for v in vals) or all(v == TrendBias.NEUTRAL for v in vals)
+    return any(v == TrendBias.BULLISH for v in vals)
 
 
 def htf_allows_short(htf: dict[str, TrendResult]) -> bool:
     if not htf:
-        return True
+        return False
     vals = [t.bias for t in htf.values()]
     if any(v == TrendBias.BULLISH for v in vals):
         return False
-    return any(v == TrendBias.BEARISH for v in vals) or all(v == TrendBias.NEUTRAL for v in vals)
+    return any(v == TrendBias.BEARISH for v in vals)
 
 
 def htf_not_bearish(htf: dict[str, TrendResult]) -> bool:

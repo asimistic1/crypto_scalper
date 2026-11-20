@@ -57,6 +57,7 @@ class Zone:
     last_touch_time: datetime
     strength: float
     role: str  # "support" | "resistance"
+    flipped: bool = False  # True when role vs pivot kind disagrees (S/R flip)
 
 
 @dataclass(frozen=True)

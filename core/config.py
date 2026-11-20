@@ -5,8 +5,8 @@ All analysis code reads from here — no magic numbers elsewhere.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 # --- Timeframes ---
 TIMEFRAMES_ALLOWED: tuple[str, ...] = ("5m", "15m", "1h")

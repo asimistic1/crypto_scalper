@@ -8,7 +8,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -27,7 +26,7 @@ from core.security import validate_symbol_rest, validate_timeframe
 _TF_MS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
 _store_lock = threading.Lock()
-_entries: dict[tuple[str, str], "_Entry"] = {}
+_entries: dict[tuple[str, str], _Entry] = {}
 
 
 @dataclass

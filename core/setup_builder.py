@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
-from typing import Mapping
 
 import pandas as pd
 
@@ -54,7 +54,7 @@ _TF_MS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d"
 
 def _aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -517,7 +517,7 @@ def build_setup(
         logger.warning("Setup ordering invalid — rejecting")
         return no_trade(symbol, timeframe, ("✖ Invalid price ordering",), as_of)
 
-    for g, n in zip(setup.gross_rr, setup.net_rr):
+    for g, n in zip(setup.gross_rr, setup.net_rr, strict=True):
         if n >= g:
             return no_trade(symbol, timeframe, ("✖ Net R:R must stay below gross",), as_of)
 

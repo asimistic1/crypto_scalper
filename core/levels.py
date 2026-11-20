@@ -6,13 +6,19 @@ Pure analysis — no network calls. Respects as_of to avoid look-ahead.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 
-from core.config import SR_MAX_ZONES_EACH_SIDE, SR_ZONE_TOLERANCE_ATR, SWING_LEFT, SWING_RIGHT, ZONE_RECENCY_HALF_LIFE_CANDLES
+from core.config import (
+    SR_MAX_ZONES_EACH_SIDE,
+    SR_ZONE_TOLERANCE_ATR,
+    SWING_LEFT,
+    SWING_RIGHT,
+    ZONE_RECENCY_HALF_LIFE_CANDLES,
+)
 from core.models import Swing, Zone
 
 
@@ -94,13 +100,13 @@ def find_swings(
 def swings_confirmed_as_of(swings: Sequence[Swing], as_of: datetime) -> list[Swing]:
     """Keep only swings that are fully confirmed at analysis time."""
     if as_of.tzinfo is None:
-        as_of = as_of.replace(tzinfo=timezone.utc)
+        as_of = as_of.replace(tzinfo=UTC)
     return [s for s in swings if _aware(s.confirmed_time) <= as_of]
 
 
 def _aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 

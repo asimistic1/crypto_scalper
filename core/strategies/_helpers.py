@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from core.models import Direction, TrendBias, TrendResult, Zone
+from core.models import TrendBias, TrendResult, Zone
 from core.trend import slice_closed_at
 
 

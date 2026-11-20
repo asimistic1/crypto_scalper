@@ -50,11 +50,11 @@ def _rsi_wilder(close: np.ndarray, period: int = 14) -> np.ndarray:
     # align: gain/loss index i maps to close index i+1
     for i in range(period, n):
         g = avg_gain[i - 1]
-        l = avg_loss[i - 1]
-        if l == 0:
+        loss_v = avg_loss[i - 1]
+        if loss_v == 0:
             out[i] = 100.0
         else:
-            rs = g / l
+            rs = g / loss_v
             out[i] = 100.0 - (100.0 / (1.0 + rs))
     return out
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -39,10 +39,10 @@ class AnalysisResult:
 
 def _as_of_from_df(df: pd.DataFrame) -> datetime:
     if df.empty:
-        return datetime.fromtimestamp(binance_server_time_ms() / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(binance_server_time_ms() / 1000.0, tz=UTC)
     ct = df["close_time"].iloc[-1]
     ms = int(ct)
-    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
 
 
 def _build_chart_overlays(
@@ -89,7 +89,7 @@ def _build_chart_overlays(
         for s in swings[-12:]:
             ts = s.pivot_time
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             sec = int(ts.timestamp())
             if s.kind == "high":
                 markers.append(
@@ -115,7 +115,7 @@ def _build_chart_overlays(
     if setup.direction != Direction.NO_TRADE and toggles.get("setup_lines", True):
         sig_ts = setup.signal_candle_time
         if sig_ts.tzinfo is None:
-            sig_ts = sig_ts.replace(tzinfo=timezone.utc)
+            sig_ts = sig_ts.replace(tzinfo=UTC)
         sec = int(sig_ts.timestamp())
         markers.append(
             {
@@ -139,18 +139,17 @@ def run_analysis(
     toggles: dict[str, bool] | None = None,
 ) -> AnalysisResult:
     """Fetch candles, build setup, prepare chart overlays."""
-    from core.candle_store import get_closed_candles, get_many
+    from core.candle_store import get_many
     from core.indicators import add_all_indicators
+    from core.models import no_trade
     from core.setup_builder import build_setup
     from core.storage import save_setup
-
-    from core.models import no_trade
     from core.symbol_ranking import display_to_rest
 
     rest = display_to_rest(display_symbol)
     ok, msg = validate_symbol_rest(rest)
     if not ok:
-        as_of = datetime.now(timezone.utc)
+        as_of = datetime.now(UTC)
         nt = no_trade(display_symbol, timeframe, (f"✖ {msg}",), as_of)
         return AnalysisResult(nt, {}, AnalysisDiagnostics(errors=(rest,)))
 
@@ -164,7 +163,7 @@ def run_analysis(
     except Exception as exc:  # noqa: BLE001 — surface to UI
         from core.models import no_trade
 
-        as_of = datetime.now(timezone.utc)
+        as_of = datetime.now(UTC)
         nt = no_trade(display_symbol, timeframe, (f"✖ Data fetch failed: {exc}",), as_of)
         return AnalysisResult(nt, {}, AnalysisDiagnostics(errors=(str(exc),)))
 
@@ -179,7 +178,7 @@ def run_analysis(
     if ltf_res is None or ltf_res.df.empty:
         from core.models import no_trade
 
-        as_of = datetime.now(timezone.utc)
+        as_of = datetime.now(UTC)
         nt = no_trade(display_symbol, timeframe, ("✖ No LTF candles",), as_of)
         return AnalysisResult(nt, {}, diag)
 

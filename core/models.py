@@ -5,10 +5,9 @@ Typed dataclasses for analysis results (pure setup engine output).
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
 
 
 class Direction(str, Enum):

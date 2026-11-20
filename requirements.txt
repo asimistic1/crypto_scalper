@@ -1,7 +1,6 @@
-streamlit>=1.40.0
-plotly
-ccxt
-requests
-pandas
-ta
-python-dotenv
+streamlit==1.67.0
+requests==2.34.2
+pandas==3.1.1
+numpy==2.5.5
+python-dotenv==1.2.4
+ccxt==4.5.93

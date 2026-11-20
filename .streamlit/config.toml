@@ -1,7 +1,14 @@
-# Streamlit settings (local + Community Cloud).
+# Streamlit — security-focused defaults (local + Community Cloud)
+
 [theme]
 base = "dark"
 
 [server]
-# Safer default when deploying to Cloud; local dev still works.
 headless = true
+enableXsrfProtection = true
+runOnSave = false
+maxUploadSize = 1
+
+[client]
+showErrorDetails = false
+toolbarMode = "viewer"

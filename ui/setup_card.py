@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from core.models import Direction, EntryType, Setup, TrendBias
+from core.models import Direction, Setup, TrendBias
 
 PK = ZoneInfo("Asia/Karachi")
 
@@ -97,6 +97,7 @@ def render_setup_card(
         (setup.tp1, setup.tp2, setup.tp3),
         setup.tp_pcts,
         setup.net_rr,
+        strict=True,
     ):
         with col:
             st.metric(label, f"{tp:.4f}", f"{pct:.2f}% · net R {rr:.2f}")

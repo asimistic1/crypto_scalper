@@ -1,0 +1,11 @@
+target-version = "py313"
+line-length = 110
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "E741"]
+
+[lint.per-file-ignores]
+"streamlit_app.py" = ["B008"]
+"tests/**" = ["E402", "I001", "F401", "F841", "UP017"]
+"ui/**" = ["B905", "UP017", "F401"]

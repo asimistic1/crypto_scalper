@@ -23,6 +23,7 @@ def _maybe_roll_window() -> None:
 
 
 def add_weight(used: int) -> None:
+    global _weight_used
     with _lock:
         _maybe_roll_window()
         _weight_used += max(0, used)

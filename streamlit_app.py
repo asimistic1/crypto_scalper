@@ -5,12 +5,15 @@ Run: streamlit run streamlit_app.py  (inside venv)
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import timedelta
 
 import streamlit as st
+from dotenv import load_dotenv
 
-from core.data import TOP_SYMBOLS_FALLBACK, region_block_help_markdown, region_block_user_message
+from core.auth_gate import require_auth
+from core.data import TOP_SYMBOLS_FALLBACK
 from core.rate_limit import BinanceCooldownActive, banner_message, is_in_cooldown
 from core.symbol_ranking import display_to_rest
 from core.weight_budget import weight_used_this_minute
@@ -18,7 +21,14 @@ from ui.setup_card import render_setup_card
 
 ANALYZE_DEBOUNCE_SECONDS = 3
 
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 st.set_page_config(page_title="Crypto Scalper", layout="wide", initial_sidebar_state="expanded")
+
+if not require_auth():
+    st.stop()
 
 st.markdown(
     """
@@ -196,6 +206,14 @@ with st.sidebar:
 
 @st.fragment
 def chart_and_setup_panel() -> None:
+    try:
+        _chart_and_setup_panel_body()
+    except Exception:
+        logger.exception("chart_and_setup_panel failed")
+        st.error("Something went wrong updating the chart. Try Refresh or Analyze again.")
+
+
+def _chart_and_setup_panel_body() -> None:
     from core.candle_store import get_closed_candles
     from core.exchange_info import tick_size
     from core.live_chart import render_live_chart
@@ -266,6 +284,13 @@ def chart_and_setup_panel() -> None:
 @st.fragment(run_every=timedelta(seconds=30))
 def missed_candle_guard() -> None:
     """Lightweight tail fetch (~1 weight) if the browser missed a candle_closed event."""
+    try:
+        _missed_candle_guard_body()
+    except Exception:
+        logger.exception("missed_candle_guard failed")
+
+
+def _missed_candle_guard_body() -> None:
     if is_in_cooldown():
         return
     from core.candle_store import get_closed_candles
@@ -289,7 +314,7 @@ def missed_candle_guard() -> None:
             _run_analysis(toggles)
             _record_analyze()
     except (BinanceCooldownActive, Exception):
-        pass
+        return
 
 
 chart_and_setup_panel()

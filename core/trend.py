@@ -4,7 +4,7 @@ Higher-timeframe and local trend bias (pure, no look-ahead).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -14,7 +14,7 @@ from core.models import TrendBias, TrendResult
 
 def _aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 

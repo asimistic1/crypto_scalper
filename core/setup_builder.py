@@ -1,0 +1,1 @@
+# Placeholder - Phase 2: trade setup construction (entry, SL, TP).

@@ -1,0 +1,11 @@
+This is a crypto scalping signal dashboard in Python.
+- Use Streamlit for UI, Plotly for charts, ccxt for exchanges, the `ta` library for indicators.
+- Binance USDT-M futures = data source (public data, no API key). MEXC futures = trade execution (much later).
+- Keep code modular: one responsibility per file, following the project folder structure.
+- Never hardcode API keys; read from .env using python-dotenv. Never print or log keys.
+- Always include trading fees and slippage in any profit calculation.
+- Never use future candles when calculating signals (no look-ahead bias).
+- Add clear comments; the owner is not an expert programmer.
+- Handle API and network errors gracefully; the dashboard must never crash.
+- Always run commands inside the venv (Python 3.13).
+- Only build what is asked in the current prompt; do not jump ahead to later phases.

@@ -1,0 +1,1 @@
+# Core package: market data, indicators, and chart building for the dashboard.

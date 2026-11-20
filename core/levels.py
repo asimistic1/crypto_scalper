@@ -1,0 +1,1 @@
+# Placeholder - Phase 2: support and resistance level detection.

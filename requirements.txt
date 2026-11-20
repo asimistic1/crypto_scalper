@@ -1,0 +1,7 @@
+streamlit
+plotly
+ccxt
+pandas
+ta
+python-dotenv
+streamlit-autorefresh

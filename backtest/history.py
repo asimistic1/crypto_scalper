@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
 
 from backtest.paths import history_parquet
@@ -11,7 +12,6 @@ from core.config import (
     ANALYSIS_CANDLES,
     HIGHER_TIMEFRAMES,
     HTF_CANDLES,
-    MIN_24H_QUOTE_VOLUME_USDT,
 )
 from core.indicators import add_all_indicators
 from core.trend import slice_closed_at
@@ -60,10 +60,19 @@ def slice_htf_frames(
 
 
 def quote_volume_24h_at(df: pd.DataFrame, as_of: datetime) -> float:
-    closed = slice_closed_at(df, as_of)
-    if closed.empty or "quote_volume" not in closed.columns:
-        return float(MIN_24H_QUOTE_VOLUME_USDT)
-    tail = closed[closed["close_time"] > int(as_of.timestamp() * 1000) - 86_400_000]
-    qv = float(tail["quote_volume"].sum())
-    return max(qv, float(MIN_24H_QUOTE_VOLUME_USDT))
+    """True rolling 24h quote volume at as_of (no liquidity floor)."""
+    from backtest.windows import precompute_quote_volume_24h
+
+    if df.empty or "quote_volume" not in df.columns:
+        return 0.0
+    as_ms = int(as_of.timestamp() * 1000)
+    full_ct = df["close_time"].to_numpy(dtype=np.int64)
+    end = int(np.searchsorted(full_ct, as_ms, side="right")) - 1
+    if end < 0:
+        return 0.0
+    series = precompute_quote_volume_24h(
+        full_ct,
+        df["quote_volume"].to_numpy(dtype=np.float64),
+    )
+    return float(series[end])
 

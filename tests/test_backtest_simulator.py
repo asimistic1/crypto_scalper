@@ -84,6 +84,68 @@ class SimulatorTests(unittest.TestCase):
         tr = simulate_trade(df, sig, BacktestConfig(), exit_model="tp1_full")
         self.assertEqual(tr.outcome, Outcome.SL.value)
 
+    def test_partial_be_tp1_then_be(self) -> None:
+        df = _df(
+            [
+                {"open": 100, "high": 101, "low": 99, "close": 100},
+                {"open": 100, "high": 105, "low": 99.5, "close": 104},
+                {"open": 103, "high": 103.5, "low": 99.0, "close": 100.5},
+            ]
+        )
+        sig = SimSignal(Direction.LONG, EntryType.MARKET, 100.0, 98.0, 104.0, 106.0, 108.0, 0)
+        tr = simulate_trade(df, sig, BacktestConfig(), exit_model="partial_be")
+        self.assertTrue(tr.filled)
+        self.assertEqual(tr.outcome, Outcome.BE.value)
+
+    def test_partial_be_full_run(self) -> None:
+        df = _df(
+            [
+                {"open": 100, "high": 101, "low": 99, "close": 100},
+                {"open": 100, "high": 105, "low": 100.2, "close": 104},
+                {"open": 104, "high": 107, "low": 103.5, "close": 106.5},
+                {"open": 106.5, "high": 109, "low": 106, "close": 108.5},
+            ]
+        )
+        sig = SimSignal(Direction.LONG, EntryType.MARKET, 100.0, 98.0, 104.0, 106.0, 108.0, 0)
+        tr = simulate_trade(df, sig, BacktestConfig(), exit_model="partial_be")
+        self.assertEqual(tr.outcome, Outcome.TP3.value)
+
+    def test_partial_be_sl_before_tp1(self) -> None:
+        df = _df(
+            [
+                {"open": 100, "high": 101, "low": 99, "close": 100},
+                {"open": 100, "high": 101, "low": 97.0, "close": 98},
+            ]
+        )
+        sig = SimSignal(Direction.LONG, EntryType.MARKET, 100.0, 98.0, 104.0, 106.0, 108.0, 0)
+        tr = simulate_trade(df, sig, BacktestConfig(), exit_model="partial_be")
+        self.assertEqual(tr.outcome, Outcome.SL.value)
+
+    def test_partial_be_tp1_tp2_then_be(self) -> None:
+        df = _df(
+            [
+                {"open": 100, "high": 101, "low": 99, "close": 100},
+                {"open": 100, "high": 105, "low": 100.2, "close": 104},
+                {"open": 104, "high": 107, "low": 103.0, "close": 106},
+                {"open": 103, "high": 103.5, "low": 99.0, "close": 100.2},
+            ]
+        )
+        sig = SimSignal(Direction.LONG, EntryType.MARKET, 100.0, 98.0, 104.0, 106.0, 108.0, 0)
+        tr = simulate_trade(df, sig, BacktestConfig(), exit_model="partial_be")
+        self.assertEqual(tr.outcome, Outcome.BE.value)
+
+    def test_partial_be_gap_be(self) -> None:
+        df = _df(
+            [
+                {"open": 100, "high": 101, "low": 99, "close": 100},
+                {"open": 100, "high": 105, "low": 99.8, "close": 104},
+                {"open": 99.0, "high": 100, "low": 98.5, "close": 99},
+            ]
+        )
+        sig = SimSignal(Direction.LONG, EntryType.MARKET, 100.0, 98.0, 104.0, 106.0, 108.0, 0)
+        tr = simulate_trade(df, sig, BacktestConfig(), exit_model="partial_be")
+        self.assertEqual(tr.outcome, Outcome.BE.value)
+
     def test_limit_expired(self) -> None:
         df = _df(
             [

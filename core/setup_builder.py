@@ -39,12 +39,14 @@ from core.models import (
     ScoreBreakdown,
     Setup,
     SetupStatus,
+    TrendBias,
+    TrendResult,
     Zone,
     no_trade,
 )
 from core.strategies import run_strategies
 from core.strategies.types import StrategyContext
-from core.trend import htf_trends, slice_closed_at
+from core.trend import slice_closed_at
 
 logger = logging.getLogger(__name__)
 
@@ -504,6 +506,8 @@ def build_setup(
     as_of: datetime,
     tick_size: float,
     quote_volume_24h: float,
+    *,
+    htf_trend_cache: dict[tuple[str, int], TrendResult] | None = None,
 ) -> Setup:
     """
     Main entry: returns Setup or NO_TRADE (with optional rejected_candidate).
@@ -527,7 +531,8 @@ def build_setup(
             as_of,
         )
 
-    ltf = add_all_indicators(ltf)
+    if "atr_14" not in ltf.columns:
+        ltf = add_all_indicators(ltf)
     row = ltf.iloc[-1]
     atr = float(row["atr_14"])
     close = float(row["close"])
@@ -543,10 +548,28 @@ def build_setup(
         return no_trade(symbol, timeframe, ("✖ Price mid-range, no nearby level",), as_of)
 
     htf_closed = {tf: slice_closed_at(frame, as_of) for tf, frame in htf_dfs.items()}
-    htf_trend_map = htf_trends(
-        {k: add_all_indicators(v) if len(v) else v for k, v in htf_closed.items()},
-        as_of,
-    )
+    htf_trend_map: dict[str, TrendResult] = {}
+    for tf, frame in htf_closed.items():
+        if len(frame) == 0:
+            enriched = frame
+        elif "atr_14" in frame.columns:
+            enriched = frame
+        else:
+            enriched = add_all_indicators(frame)
+        if enriched.empty:
+            htf_trend_map[tf] = TrendResult(TrendBias.NEUTRAL)
+            continue
+        last_ct = int(enriched["close_time"].iloc[-1])
+        cache_key = (tf, last_ct)
+        if htf_trend_cache is not None and cache_key in htf_trend_cache:
+            htf_trend_map[tf] = htf_trend_cache[cache_key]
+        else:
+            from core.trend import get_trend
+
+            tr = get_trend(enriched, as_of)
+            htf_trend_map[tf] = tr
+            if htf_trend_cache is not None:
+                htf_trend_cache[cache_key] = tr
 
     ctx = StrategyContext(
         symbol=symbol,

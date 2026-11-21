@@ -243,6 +243,22 @@ def simulate_trade(
             )
 
     assert fill_idx is not None
+    if exit_model == "partial_be":
+        return _simulate_partial_be(
+            df,
+            signal,
+            cfg,
+            fill_idx,
+            fill_price,
+            i0,
+            sig_time,
+            symbol,
+            timeframe,
+            slip,
+            taker_all,
+            risk,
+        )
+
     sl = signal.stop_loss
     tp1 = signal.tp1
     max_hold = cfg.max_hold_bars.get(timeframe, 32)
@@ -433,6 +449,215 @@ def simulate_trade(
         r_n,
         fees_paid,
         funding_paid,
+        mae,
+        mfe,
+        filled=True,
+    )
+
+
+PARTIAL_LEG_FRACS = (0.5, 0.3, 0.2)
+
+
+def _breakeven_stop(fill_price: float, cfg: BacktestConfig, direction: Direction) -> float:
+    """Stop level after TP1 that nets ~zero after round-trip costs."""
+    if cfg.fee_model == "conservative":
+        rt = (cfg.taker_fee + cfg.slippage) * 2
+    else:
+        rt = cfg.taker_fee * 2 + cfg.slippage * 2
+    if direction == Direction.LONG:
+        return fill_price * (1 + rt)
+    return fill_price * (1 - rt)
+
+
+def _simulate_partial_be(
+    df: pd.DataFrame,
+    signal: SimSignal,
+    cfg: BacktestConfig,
+    fill_idx: int,
+    fill_price: float,
+    signal_bar: int,
+    sig_time: datetime,
+    symbol: str,
+    timeframe: str,
+    slip: float,
+    taker_all: bool,
+    risk: float,
+) -> SimTrade:
+    max_hold = cfg.max_hold_bars.get(timeframe, 32)
+    sl = signal.stop_loss
+    tp1, tp2, tp3 = signal.tp1, signal.tp2, signal.tp3
+    remain = 1.0
+    leg_i = 0
+    tp1_done = False
+    fees_paid = _leg_fee(fill_price, cfg, taker=True)
+    r_gross = 0.0
+    r_net = 0.0
+    mae = 0.0
+    mfe = 0.0
+    exit_px_acc = 0.0
+    exit_frac_acc = 0.0
+    final_outcome = Outcome.TIMEOUT.value
+    exit_time = None
+
+    def _take(exit_raw: float, frac: float, outcome: str, *, maker: bool = False) -> None:
+        nonlocal remain, fees_paid, r_gross, r_net, exit_px_acc, exit_frac_acc, final_outcome, exit_time
+        if frac <= 0:
+            return
+        exit_p = _apply_slippage(exit_raw, signal.direction, "exit", slip if (taker_all or not maker) else 0.0)
+        g, n, f = _r_multiple(signal, fill_price, exit_p, risk, cfg, legs=frac)
+        r_gross += g
+        r_net += n
+        fees_paid += f
+        remain -= frac
+        exit_px_acc += exit_p * frac
+        exit_frac_acc += frac
+        final_outcome = outcome
+        exit_time = None
+
+    def _finish(bar, outcome: str, exit_raw: float, bars_held: int) -> SimTrade:
+        nonlocal exit_time
+        if remain > 0:
+            _take(exit_raw, remain, outcome)
+        exit_time = pd.Timestamp(bar["time"]).to_pydatetime()
+        avg_exit = exit_px_acc / exit_frac_acc if exit_frac_acc > 0 else float(bar["close"])
+        return _mk(
+            signal,
+            cfg,
+            "partial_be",
+            symbol,
+            timeframe,
+            sig_time,
+            pd.Timestamp(df["time"].iloc[fill_idx]).to_pydatetime(),
+            exit_time,
+            fill_price,
+            avg_exit,
+            final_outcome,
+            bars_held,
+            r_gross,
+            r_net,
+            fees_paid,
+            0.0,
+            mae,
+            mfe,
+            filled=True,
+        )
+
+    for k in range(fill_idx, min(len(df), fill_idx + max_hold + 1)):
+        bar = df.iloc[k]
+        o, h, l = float(bar["open"]), float(bar["high"]), float(bar["low"])
+        if signal.direction == Direction.LONG:
+            adverse = (fill_price - l) / risk if risk else 0.0
+            favorable = (h - fill_price) / risk if risk else 0.0
+        else:
+            adverse = (h - fill_price) / risk if risk else 0.0
+            favorable = (fill_price - l) / risk if risk else 0.0
+        mae = min(mae, -abs(adverse))
+        mfe = max(mfe, favorable)
+
+        if signal.direction == Direction.LONG:
+            if not tp1_done:
+                if o < sl:
+                    return _finish(bar, Outcome.SL.value, o, k - fill_idx)
+                same = _same_bar_sl_first_long(bar, sl, tp1)
+                if same == Outcome.SL.value:
+                    return _finish(bar, Outcome.SL.value, sl, k - fill_idx)
+                if same != Outcome.TP1.value:
+                    continue
+                _take(tp1, PARTIAL_LEG_FRACS[0], Outcome.TP1.value, maker=not taker_all)
+                tp1_done = True
+                remain = PARTIAL_LEG_FRACS[1] + PARTIAL_LEG_FRACS[2]
+                leg_i = 1
+                sl = _breakeven_stop(fill_price, cfg, signal.direction)
+                if l < sl:
+                    return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+                if h > tp2:
+                    _take(tp2, PARTIAL_LEG_FRACS[1], Outcome.TP2.value, maker=not taker_all)
+                    leg_i = 2
+                    remain = PARTIAL_LEG_FRACS[2]
+                    if l < sl:
+                        return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+                    if h > tp3:
+                        return _finish(bar, Outcome.TP3.value, tp3, k - fill_idx)
+                continue
+
+            if o < sl:
+                return _finish(bar, Outcome.BE.value if sl >= fill_price else Outcome.SL.value, o, k - fill_idx)
+            if l < sl:
+                return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+            if leg_i == 1 and h > tp2:
+                _take(tp2, PARTIAL_LEG_FRACS[1], Outcome.TP2.value, maker=not taker_all)
+                leg_i = 2
+                remain = PARTIAL_LEG_FRACS[2]
+                if l < sl:
+                    return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+            if leg_i == 2 and h > tp3:
+                return _finish(bar, Outcome.TP3.value, tp3, k - fill_idx)
+        else:
+            if not tp1_done:
+                if o > sl:
+                    return _finish(bar, Outcome.SL.value, o, k - fill_idx)
+                same = _same_bar_sl_first_short(bar, sl, tp1)
+                if same == Outcome.SL.value:
+                    return _finish(bar, Outcome.SL.value, sl, k - fill_idx)
+                if same != Outcome.TP1.value:
+                    continue
+                _take(tp1, PARTIAL_LEG_FRACS[0], Outcome.TP1.value, maker=not taker_all)
+                tp1_done = True
+                remain = PARTIAL_LEG_FRACS[1] + PARTIAL_LEG_FRACS[2]
+                leg_i = 1
+                sl = _breakeven_stop(fill_price, cfg, signal.direction)
+                if h > sl:
+                    return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+                if l < tp2:
+                    _take(tp2, PARTIAL_LEG_FRACS[1], Outcome.TP2.value, maker=not taker_all)
+                    leg_i = 2
+                    remain = PARTIAL_LEG_FRACS[2]
+                    if h > sl:
+                        return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+                    if l < tp3:
+                        return _finish(bar, Outcome.TP3.value, tp3, k - fill_idx)
+                continue
+
+            if o > sl:
+                return _finish(bar, Outcome.BE.value if sl <= fill_price else Outcome.SL.value, o, k - fill_idx)
+            if h > sl:
+                return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+            if leg_i == 1 and l < tp2:
+                _take(tp2, PARTIAL_LEG_FRACS[1], Outcome.TP2.value, maker=not taker_all)
+                leg_i = 2
+                remain = PARTIAL_LEG_FRACS[2]
+                if h > sl:
+                    return _finish(bar, Outcome.BE.value, sl, k - fill_idx)
+            if leg_i == 2 and l < tp3:
+                return _finish(bar, Outcome.TP3.value, tp3, k - fill_idx)
+
+    last = df.iloc[min(len(df) - 1, fill_idx + max_hold)]
+    exit_p = _apply_slippage(float(last["close"]), signal.direction, "exit", slip)
+    if remain > 0:
+        g, n, f = _r_multiple(signal, fill_price, exit_p, risk, cfg, legs=remain)
+        r_gross += g
+        r_net += n
+        fees_paid += f
+        exit_px_acc += exit_p * remain
+        exit_frac_acc += remain
+    avg_exit = exit_px_acc / exit_frac_acc if exit_frac_acc > 0 else exit_p
+    return _mk(
+        signal,
+        cfg,
+        "partial_be",
+        symbol,
+        timeframe,
+        sig_time,
+        pd.Timestamp(df["time"].iloc[fill_idx]).to_pydatetime(),
+        pd.Timestamp(last["time"]).to_pydatetime(),
+        fill_price,
+        avg_exit,
+        final_outcome if remain <= 0 else Outcome.TIMEOUT.value,
+        min(len(df) - 1, fill_idx + max_hold) - fill_idx,
+        r_gross,
+        r_net,
+        fees_paid,
+        0.0,
         mae,
         mfe,
         filled=True,

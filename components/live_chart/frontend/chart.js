@@ -22,6 +22,8 @@
   let ws = null;
   let backoffIx = 0;
   let reconnectTimer = null;
+  let wsOpenTimer = null;
+  let lastWsError = "";
   let candles = [];
   let precision = { type: "price", minMove: 0.1, precision: 1 };
   let lastAggPrice = null;
@@ -361,6 +363,8 @@
     } else {
       setupState = null;
       el("setup-badge").classList.add("hidden");
+      if (riskAreaSeries) riskAreaSeries.setData([]);
+      if (rewardAreaSeries) rewardAreaSeries.setData([]);
     }
 
     if (toggles.zones !== false && candles.length) {
@@ -451,6 +455,11 @@
 
   function paintRiskReward(setup) {
     if (!candles.length || !riskAreaSeries || !rewardAreaSeries) return;
+    if (!setup || !Number.isFinite(+setup.entry)) {
+      riskAreaSeries.setData([]);
+      rewardAreaSeries.setData([]);
+      return;
+    }
     const signal = setup.signal_time
       ? Math.floor(new Date(setup.signal_time).getTime() / 1000)
       : candles[Math.max(0, candles.length - 20)].time;
@@ -458,12 +467,19 @@
     const sl = +setup.sl;
     const tp2 = +setup.tp2;
     const tail = candles.filter((c) => c.time >= signal);
-    if (!tail.length || !Number.isFinite(entry)) return;
+    if (!tail.length) return;
     const riskLo = Math.min(entry, sl);
     const riskHi = Math.max(entry, sl);
+    try {
+      riskAreaSeries.applyOptions({ baseValue: { type: "price", price: riskLo } });
+      rewardAreaSeries.applyOptions({ baseValue: { type: "price", price: entry } });
+    } catch (_) {}
     riskAreaSeries.setData(tail.map((c) => ({ time: c.time, value: riskHi })));
     const rewardLevel = Number.isFinite(tp2) ? tp2 : entry;
-    rewardAreaSeries.setData(tail.map((c) => ({ time: c.time, value: rewardLevel })));
+    const rewardBase = Math.min(entry, rewardLevel);
+    const rewardTop = Math.max(entry, rewardLevel);
+    rewardAreaSeries.applyOptions({ baseValue: { type: "price", price: rewardBase } });
+    rewardAreaSeries.setData(tail.map((c) => ({ time: c.time, value: rewardTop })));
   }
 
   function updateSetupBadge() {
@@ -851,8 +867,13 @@
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    if (wsOpenTimer) {
+      clearTimeout(wsOpenTimer);
+      wsOpenTimer = null;
+    }
     if (ws) {
       ws.onclose = null;
+      ws.onerror = null;
       ws.close();
       ws = null;
     }
@@ -884,9 +905,21 @@
   function connectWs() {
     closeWs();
     const wsSymbol = currentSymbol.toLowerCase();
-    setStatus("reconnecting", "Connecting…");
-    ws = new WebSocket(wsUrl(wsSymbol, currentTf));
+    lastWsError = "";
+    setStatus("reconnecting", "Starting…");
+    const url = wsUrl(wsSymbol, currentTf);
+    ws = new WebSocket(url);
+    wsOpenTimer = setTimeout(() => {
+      if (ws && ws.readyState !== WebSocket.OPEN) {
+        const msg = lastWsError || "WebSocket still closed after 10s (" + url + ")";
+        setStatus("", msg);
+      }
+    }, 10000);
     ws.onopen = () => {
+      if (wsOpenTimer) {
+        clearTimeout(wsOpenTimer);
+        wsOpenTimer = null;
+      }
       backoffIx = 0;
       setStatus("live", "Live");
     };
@@ -919,9 +952,32 @@
         el("vol").textContent = fmtVol(+d.q);
       }
     };
-    ws.onerror = () => setStatus("", "Error");
-    ws.onclose = () => scheduleReconnect();
+    ws.onerror = () => {
+      if (wsOpenTimer) {
+        clearTimeout(wsOpenTimer);
+        wsOpenTimer = null;
+      }
+      lastWsError = "WebSocket error (check CSP / network)";
+      setStatus("", lastWsError);
+    };
+    ws.onclose = (ev) => {
+      if (wsOpenTimer) {
+        clearTimeout(wsOpenTimer);
+        wsOpenTimer = null;
+      }
+      if (!lastWsError && ev && ev.code) {
+        lastWsError = "WebSocket closed (" + ev.code + ")";
+      }
+      scheduleReconnect();
+    };
   }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (renderArgs.streaming_enabled === false) return;
+    if (!currentSymbol) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) connectWs();
+  });
 
   function overlaySig(args) {
     return JSON.stringify({

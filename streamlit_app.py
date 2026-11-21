@@ -345,10 +345,18 @@ def _missed_candle_guard_body() -> None:
         return
 
 
-chart_and_setup_panel()
-missed_candle_guard()
+def live_dashboard() -> None:
+    chart_and_setup_panel()
+    missed_candle_guard()
+    st.caption(
+        "Live prices stream in the browser (Binance /market WebSocket). "
+        "Analysis uses closed candles only — no look-ahead."
+    )
 
-st.caption(
-    "Live prices stream in the browser (Binance /market WebSocket). "
-    "Analysis uses closed candles only — no look-ahead."
-)
+
+st.navigation(
+    [
+        st.Page(live_dashboard, title="Live", icon="📈", default=True),
+        st.Page("pages/2_Backtest.py", title="Backtest", icon="📊"),
+    ]
+).run()

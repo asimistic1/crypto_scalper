@@ -7,7 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import multiprocessing
+import os
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -46,8 +46,8 @@ SIGNAL_COLUMNS = (
     "setup_id",
 )
 
-# Bars per worker chunk (5m histories are long)
-CHUNK_SIZE = 1500
+CHUNK_SIZE = 200
+LOG_INTERVAL_SEC = 60.0
 
 
 def _git_hash() -> str:
@@ -160,6 +160,31 @@ def _scan_chunk(
     return rows
 
 
+def _log_progress(
+    *,
+    symbol: str,
+    tf: str,
+    done: int,
+    total: int,
+    t0: float,
+    last_log: float,
+) -> float:
+    elapsed = time.perf_counter() - t0
+    if elapsed > 0 and time.perf_counter() - last_log >= LOG_INTERVAL_SEC:
+        bps = done / elapsed
+        logger.info(
+            "signals %s %s: %d/%d bars (%.1f bars/s, ETA %.0fs)",
+            symbol,
+            tf,
+            done,
+            total,
+            bps,
+            (total - done) / bps if bps > 0 else 0.0,
+        )
+        return time.perf_counter()
+    return last_log
+
+
 def generate_signals(
     symbol: str,
     tf: str,
@@ -195,45 +220,68 @@ def generate_signals(
 
     t0 = time.perf_counter()
     rows: list[dict] = []
-    w = workers if workers is not None else max(1, multiprocessing.cpu_count() - 1)
+    w = workers if workers is not None else max(1, (os.cpu_count() or 2) - 1)
+    last_log = t0
+    done = 0
 
-    if w <= 1 or len(indices) < CHUNK_SIZE:
-        windows = BarWindows.from_frames(tf, ltf_raw, htf_frames, daily_df)
-        htf_cache: dict = {}
-        it = tqdm(indices, desc=f"{symbol} {tf}", unit="bar", disable=not progress)
-        for i in it:
-            row = evaluate_bar(symbol, tf, windows, i, tick, htf_trend_cache=htf_cache)
-            if row:
-                rows.append(row)
-    else:
-        chunks = [indices[i : i + CHUNK_SIZE] for i in range(0, len(indices), CHUNK_SIZE)]
-        ltf_path = str(history_parquet(symbol, tf))
-        with ProcessPoolExecutor(max_workers=w) as pool:
-            futs = {
-                pool.submit(_scan_chunk, symbol, tf, ch, ltf_path, htf_paths, daily_path, tick): len(ch)
-                for ch in chunks
-            }
-            with tqdm(total=len(indices), desc=f"{symbol} {tf}", unit="bar", disable=not progress) as pbar:
-                for fut in as_completed(futs):
-                    rows.extend(fut.result())
-                    pbar.update(futs[fut])
+    try:
+        if w <= 1 or len(indices) < CHUNK_SIZE:
+            windows = BarWindows.from_frames(tf, ltf_raw, htf_frames, daily_df)
+            htf_cache: dict = {}
+            it = tqdm(indices, desc=f"{symbol} {tf}", unit="bar", disable=not progress)
+            for i in it:
+                row = evaluate_bar(symbol, tf, windows, i, tick, htf_trend_cache=htf_cache)
+                if row:
+                    rows.append(row)
+                done += 1
+                last_log = _log_progress(symbol=symbol, tf=tf, done=done, total=len(indices), t0=t0, last_log=last_log)
+        else:
+            chunks = [indices[i : i + CHUNK_SIZE] for i in range(0, len(indices), CHUNK_SIZE)]
+            ltf_path = str(history_parquet(symbol, tf))
+            pool = ProcessPoolExecutor(max_workers=w)
+            try:
+                futs = {
+                    pool.submit(_scan_chunk, symbol, tf, ch, ltf_path, htf_paths, daily_path, tick): len(ch)
+                    for ch in chunks
+                }
+                with tqdm(total=len(indices), desc=f"{symbol} {tf}", unit="bar", disable=not progress) as pbar:
+                    for fut in as_completed(futs):
+                        rows.extend(fut.result())
+                        n = futs[fut]
+                        done += n
+                        pbar.update(n)
+                        last_log = _log_progress(
+                            symbol=symbol, tf=tf, done=done, total=len(indices), t0=t0, last_log=last_log
+                        )
+            except KeyboardInterrupt:
+                logger.warning("Signal scan interrupted — shutting down workers")
+                raise
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+    except KeyboardInterrupt:
+        raise
 
     elapsed = time.perf_counter() - t0
     bps = len(indices) / elapsed if elapsed > 0 else 0.0
+    ms_per_bar = (elapsed / len(indices) * 1000.0) if indices else 0.0
     logger.info(
-        "signals %s %s: %d setups from %d bars in %.1fs (%.1f bars/s)",
+        "signals %s %s: %d setups from %d bars in %.1fs (%.1f bars/s, %.2f ms/bar)",
         symbol,
         tf,
         len(rows),
         len(indices),
         elapsed,
         bps,
+        ms_per_bar,
     )
 
     df = pd.DataFrame(rows, columns=SIGNAL_COLUMNS) if rows else pd.DataFrame(columns=SIGNAL_COLUMNS)
     df.to_parquet(out_path, index=False)
     meta_path.write_text(
-        json.dumps({"cache_key": key, "rows": len(df), "mask_fraction": frac, "bars_per_sec": bps}, indent=2),
+        json.dumps(
+            {"cache_key": key, "rows": len(df), "mask_fraction": frac, "bars_per_sec": bps, "ms_per_bar": ms_per_bar},
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return df
@@ -247,7 +295,7 @@ def generate_all(
 ) -> dict[tuple[str, str], pd.DataFrame]:
     tasks = [(s, tf) for s in symbols for tf in timeframes]
     out: dict[tuple[str, str], pd.DataFrame] = {}
-    pool_workers = max(1, min(len(tasks), (workers or max(1, multiprocessing.cpu_count() - 1))))
+    pool_workers = max(1, min(len(tasks), (workers or max(1, (os.cpu_count() or 2) - 1))))
     with ProcessPoolExecutor(max_workers=pool_workers) as pool:
         futs = {pool.submit(generate_signals, s, tf, progress=False, workers=1): (s, tf) for s, tf in tasks}
         for fut in as_completed(futs):

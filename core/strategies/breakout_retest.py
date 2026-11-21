@@ -1,44 +1,60 @@
 """
 Breakout + retest strategy — trade continuation after structure break.
+Uses Zone.origin (pivot type), not role, so flipped zones still match breakouts.
 """
 
 from __future__ import annotations
 
-from core.models import Direction
+from core.models import Direction, Zone
 from core.strategies._helpers import (
     closed_df_at,
     htf_not_bearish,
     htf_not_bullish,
-    resistance_zones,
     signal_row,
-    support_zones,
+    zones_with_origin,
 )
 from core.strategies.types import StrategyCandidate, StrategyContext
 
+LOOKBACK = 10
+VOL_MIN = 1.5
 
-def _find_breakout_long(df, res_zones, lookback: int = 10):
+
+def _window_prev(df, lookback: int = LOOKBACK):
+    """Closed bars strictly before the signal candle."""
     if len(df) < lookback + 1:
         return None
-    window = df.iloc[-(lookback + 1) : -1]
-    for z in res_zones:
-        for _, row in window.iterrows():
-            if float(row["close"]) > z.price_high and float(row["volume_ratio"]) >= 1.5:
-                return z
+    return df.iloc[-(lookback + 1) : -1]
+
+
+def _find_breakout_long(df, zones: list[Zone], lookback: int = LOOKBACK) -> Zone | None:
+    window = _window_prev(df, lookback)
+    if window is None:
+        return None
+    close = window["close"].to_numpy(dtype=float)
+    vol = window["volume_ratio"].fillna(0.0).to_numpy(dtype=float)
+    hi_zones = zones_with_origin(zones, "high")
+    for z in hi_zones:
+        broke = (close > z.price_high) & (vol >= VOL_MIN)
+        if broke.any():
+            return z
     return None
 
 
-def _find_breakout_short(df, sup_zones, lookback: int = 10):
-    if len(df) < lookback + 1:
+def _find_breakout_short(df, zones: list[Zone], lookback: int = LOOKBACK) -> Zone | None:
+    window = _window_prev(df, lookback)
+    if window is None:
         return None
-    window = df.iloc[-(lookback + 1) : -1]
-    for z in sup_zones:
-        for _, row in window.iterrows():
-            if float(row["close"]) < z.price_low and float(row["volume_ratio"]) >= 1.5:
-                return z
+    close = window["close"].to_numpy(dtype=float)
+    vol = window["volume_ratio"].fillna(0.0).to_numpy(dtype=float)
+    lo_zones = zones_with_origin(zones, "low")
+    for z in lo_zones:
+        broke = (close < z.price_low) & (vol >= VOL_MIN)
+        if broke.any():
+            return z
     return None
 
 
-def _retest_long(df, zone) -> bool:
+def _retest_long(df, zone: Zone) -> bool:
     cur = signal_row(df)
     touched = float(cur["low"]) <= zone.price_high
     held = float(cur["close"]) >= zone.price_low
@@ -46,7 +62,7 @@ def _retest_long(df, zone) -> bool:
     return touched and held and closes_up
 
 
-def _retest_short(df, zone) -> bool:
+def _retest_short(df, zone: Zone) -> bool:
     cur = signal_row(df)
     touched = float(cur["high"]) >= zone.price_low
     held = float(cur["close"]) <= zone.price_high
@@ -62,9 +78,10 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
     cur = signal_row(df)
     sig_time = cur["time"]
     sig_time = sig_time.to_pydatetime() if hasattr(sig_time, "to_pydatetime") else sig_time
+    zone_list = list(ctx.zones)
 
     if htf_not_bearish(ctx.htf_trends):
-        zone = _find_breakout_long(df, resistance_zones(ctx.zones))
+        zone = _find_breakout_long(df, zone_list)
         if zone and _retest_long(df, zone):
             vol = float(cur["volume_ratio"])
             reasons = (
@@ -86,7 +103,7 @@ def detect(ctx: StrategyContext) -> StrategyCandidate | None:
             )
 
     if htf_not_bullish(ctx.htf_trends):
-        zone = _find_breakout_short(df, support_zones(ctx.zones))
+        zone = _find_breakout_short(df, zone_list)
         if zone and _retest_short(df, zone):
             vol = float(cur["volume_ratio"])
             reasons = (

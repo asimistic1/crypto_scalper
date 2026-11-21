@@ -92,15 +92,12 @@ def _stoch_rsi(
     close: np.ndarray, rsi_len: int = 14, stoch_len: int = 14, k_smooth: int = 3, d_smooth: int = 3
 ) -> tuple[np.ndarray, np.ndarray]:
     rsi = _rsi_wilder(close, rsi_len)
-    n = len(close)
-    stoch = np.full(n, np.nan, dtype=float)
-    for i in range(rsi_len + stoch_len, n):
-        window = rsi[i - stoch_len + 1 : i + 1]
-        lo, hi = np.nanmin(window), np.nanmax(window)
-        if hi == lo:
-            stoch[i] = 0.0
-        else:
-            stoch[i] = (rsi[i] - lo) / (hi - lo) * 100.0
+    rsi_s = pd.Series(rsi)
+    lo = rsi_s.rolling(stoch_len, min_periods=stoch_len).min().to_numpy(dtype=float)
+    hi = rsi_s.rolling(stoch_len, min_periods=stoch_len).max().to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        span = hi - lo
+        stoch = np.where(np.isnan(span), np.nan, np.where(span == 0, 0.0, (rsi - lo) / span * 100.0))
     k = pd.Series(stoch).rolling(k_smooth, min_periods=k_smooth).mean().to_numpy()
     d = pd.Series(k).rolling(d_smooth, min_periods=d_smooth).mean().to_numpy()
     return k, d

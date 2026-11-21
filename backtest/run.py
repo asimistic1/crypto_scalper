@@ -30,6 +30,7 @@ from backtest.metrics import (
     too_good_alarm,
 )
 from backtest.paths import DATASET_PATH, RUNS_DIR
+from backtest.run_lock import acquire_run_lock
 from backtest.signals import generate_signals
 from backtest.simulator import SimSignal, simulate_trade, trade_to_dict
 from core.models import Direction, EntryType
@@ -72,6 +73,17 @@ def _signals_to_sim(signals: pd.DataFrame) -> list[tuple[str, str, SimSignal]]:
 
 
 def run_backtest(
+    symbols: list[str],
+    timeframes: list[str],
+    cfg: BacktestConfig,
+    *,
+    skip_signals: bool = False,
+) -> Path:
+    with acquire_run_lock():
+        return _run_backtest_body(symbols, timeframes, cfg, skip_signals=skip_signals)
+
+
+def _run_backtest_body(
     symbols: list[str],
     timeframes: list[str],
     cfg: BacktestConfig,

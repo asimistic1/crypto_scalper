@@ -98,7 +98,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_breakout_retest_long(self) -> None:
         df = _frame(30)
-        zone = Zone(110.0, 111.0, 110.5, 3, df["time"].iloc[0], 2.0, "resistance")
+        zone = Zone(110.0, 111.0, 110.5, 3, df["time"].iloc[0], 2.0, "resistance", origin="high")
         brk_idx = -5
         df.iloc[brk_idx, df.columns.get_loc("close")] = 112.0
         df.iloc[brk_idx, df.columns.get_loc("volume_ratio")] = 2.0

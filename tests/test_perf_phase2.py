@@ -49,6 +49,7 @@ def _reset_stores() -> None:
     reset_candle_store()
 
 
+@pytest.mark.slow
 def test_build_setup_under_150ms() -> None:
     ltf = _make_df(1000)
     htf_dfs = {"1h": _make_df(300, 60), "4h": _make_df(300, 240)}

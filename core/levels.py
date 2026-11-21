@@ -22,6 +22,22 @@ from core.config import (
 from core.models import Swing, Zone
 
 
+def _time_ms_array(df: pd.DataFrame) -> np.ndarray:
+    """Bar open times as int64 epoch ns (UTC) — same ordering as pd.to_datetime <= ts."""
+    t = pd.to_datetime(df["time"], utc=True)
+    return t.to_numpy(dtype="datetime64[ns]").view(np.int64)
+
+
+def _close_time_ms_array(df: pd.DataFrame) -> np.ndarray:
+    if "close_time" in df.columns:
+        return df["close_time"].to_numpy(dtype=np.int64)
+    return _time_ms_array(df)
+
+
+def _ms_to_dt(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000.0, tz=UTC)
+
+
 def _row_time(series_time: pd.Series, idx: int) -> datetime:
     ts = series_time.iloc[idx]
     if isinstance(ts, pd.Timestamp):
@@ -34,7 +50,7 @@ def _row_confirmed_time(df: pd.DataFrame, idx: int) -> datetime:
         cts = df["close_time"].iloc[idx]
         if pd.notna(cts):
             if isinstance(cts, (int, np.integer)):
-                return pd.to_datetime(int(cts), unit="ms", utc=True).to_pydatetime()
+                return _ms_to_dt(int(cts))
             return pd.Timestamp(cts).to_pydatetime()
     return _row_time(df["time"], idx)
 
@@ -71,14 +87,18 @@ def find_swings(
     is_high = win_h[win_rows, center] == win_h[win_rows].max(axis=1)
     is_low = win_l[win_rows, center] == win_l[win_rows].min(axis=1)
 
+    time_ms = _time_ms_array(df)
+    close_ms = _close_time_ms_array(df)
     swings: list[Swing] = []
     for j, pi in enumerate(pivot_indices):
         conf_idx = pi + right
+        p_dt = pd.Timestamp(int(time_ms[pi]), unit="ns", tz="UTC").to_pydatetime()
+        c_dt = _ms_to_dt(int(close_ms[conf_idx]))
         if is_high[j]:
             swings.append(
                 Swing(
-                    pivot_time=_row_time(df["time"], pi),
-                    confirmed_time=_row_confirmed_time(df, conf_idx),
+                    pivot_time=p_dt,
+                    confirmed_time=c_dt,
                     price=float(high[pi]),
                     kind="high",
                 )
@@ -86,8 +106,8 @@ def find_swings(
         if is_low[j]:
             swings.append(
                 Swing(
-                    pivot_time=_row_time(df["time"], pi),
-                    confirmed_time=_row_confirmed_time(df, conf_idx),
+                    pivot_time=p_dt,
+                    confirmed_time=c_dt,
                     price=float(low[pi]),
                     kind="low",
                 )
@@ -117,16 +137,17 @@ def _decay_weight(candles_ago: float, half_life: float) -> float:
 
 
 def _bar_index_at_or_before(df: pd.DataFrame, ts: datetime) -> int:
-    times = pd.to_datetime(df["time"], utc=True)
+    bar_ns = _time_ms_array(df)
+    if len(bar_ns) == 0:
+        return 0
     pt = pd.Timestamp(_aware(ts))
     if pt.tzinfo is None:
         pt = pt.tz_localize("UTC")
     else:
         pt = pt.tz_convert("UTC")
-    mask = times <= pt
-    if not mask.any():
-        return 0
-    return int(mask.to_numpy().nonzero()[0][-1])
+    ts_ns = int(pt.value)
+    idx = int(np.searchsorted(bar_ns, ts_ns, side="right")) - 1
+    return max(0, idx)
 
 
 def build_zones(
@@ -148,6 +169,7 @@ def build_zones(
 
     as_of = _aware(as_of)
     as_of_idx = _bar_index_at_or_before(df, as_of)
+    time_ms = _time_ms_array(df)
     tol = tolerance_atr * atr
     by_kind: dict[str, list[Swing]] = {"high": [], "low": []}
     for s in swings:
@@ -179,7 +201,9 @@ def build_zones(
 
             weighted = 0.0
             for s in cluster:
-                pivot_idx = _bar_index_at_or_before(df, s.pivot_time)
+                p_ns = int(pd.Timestamp(_aware(s.pivot_time)).tz_convert("UTC").value)
+                pivot_idx = int(np.searchsorted(time_ms, p_ns, side="right")) - 1
+                pivot_idx = max(0, pivot_idx)
                 candles_ago = max(0, as_of_idx - pivot_idx)
                 weighted += _decay_weight(float(candles_ago), half_life)
 
@@ -196,6 +220,7 @@ def build_zones(
                     last_touch_time=_aware(last_touch),
                     strength=float(strength),
                     role=role,
+                    origin=kind,
                     flipped=flipped,
                 )
             )
@@ -264,6 +289,7 @@ def extra_levels(
                     last_touch_time=as_of,
                     strength=1.2,
                     role="resistance",
+                    origin="high",
                 )
             )
         if d_lo is not None:
@@ -276,6 +302,7 @@ def extra_levels(
                     last_touch_time=as_of,
                     strength=1.2,
                     role="support",
+                    origin="low",
                 )
             )
 
@@ -290,6 +317,7 @@ def extra_levels(
                 last_touch_time=as_of,
                 strength=1.0,
                 role="support",
+                origin="vwap",
             )
         )
     return zones

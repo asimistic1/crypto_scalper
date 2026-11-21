@@ -56,7 +56,8 @@ class Zone:
     touches: int
     last_touch_time: datetime
     strength: float
-    role: str  # "support" | "resistance"
+    role: str  # "support" | "resistance" (position vs reference price)
+    origin: str = "high"  # pivot source: high | low | vwap
     flipped: bool = False  # True when role vs pivot kind disagrees (S/R flip)
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 import time
 import unittest
+
+import pytest
 from datetime import UTC, datetime
 from pathlib import Path
 import numpy as np
@@ -43,6 +45,7 @@ def _load_pkg(symbol: str, tf: str) -> tuple | None:
     return ltf, htf_frames, daily, windows, tick
 
 
+@pytest.mark.slow
 @unittest.skipUnless(_history_ready("BTCUSDT", "15m"), "BTCUSDT 15m history required")
 class WindowPerfTests(unittest.TestCase):
     def test_build_setup_time_flat(self) -> None:
@@ -86,6 +89,7 @@ class WindowPerfTests(unittest.TestCase):
         self.assertLess(tail / max(head, 1e-9), 2.5, "per-bar time grew with index")
 
 
+@pytest.mark.slow
 @unittest.skipUnless(any(_history_ready(s, tf) for s in SYMBOLS for tf in TFS), "no history")
 class SupersetMaskTests(unittest.TestCase):
     def test_setups_subset_of_prefilter(self) -> None:

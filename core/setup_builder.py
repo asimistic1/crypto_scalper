@@ -550,26 +550,24 @@ def build_setup(
     htf_closed = {tf: slice_closed_at(frame, as_of) for tf, frame in htf_dfs.items()}
     htf_trend_map: dict[str, TrendResult] = {}
     for tf, frame in htf_closed.items():
-        if len(frame) == 0:
-            enriched = frame
-        elif "atr_14" in frame.columns:
-            enriched = frame
-        else:
-            enriched = add_all_indicators(frame)
-        if enriched.empty:
+        if frame.empty:
             htf_trend_map[tf] = TrendResult(TrendBias.NEUTRAL)
             continue
-        last_ct = int(enriched["close_time"].iloc[-1])
+        last_ct = int(frame["close_time"].iloc[-1])
         cache_key = (tf, last_ct)
         if htf_trend_cache is not None and cache_key in htf_trend_cache:
             htf_trend_map[tf] = htf_trend_cache[cache_key]
+            continue
+        if "atr_14" in frame.columns:
+            enriched = frame
         else:
-            from core.trend import get_trend
+            enriched = add_all_indicators(frame)
+        from core.trend import get_trend
 
-            tr = get_trend(enriched, as_of)
-            htf_trend_map[tf] = tr
-            if htf_trend_cache is not None:
-                htf_trend_cache[cache_key] = tr
+        tr = get_trend(enriched, as_of)
+        htf_trend_map[tf] = tr
+        if htf_trend_cache is not None:
+            htf_trend_cache[cache_key] = tr
 
     ctx = StrategyContext(
         symbol=symbol,

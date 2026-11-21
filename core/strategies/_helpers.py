@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 import pandas as pd
@@ -57,6 +58,10 @@ def support_zones(zones: tuple[Zone, ...]) -> list[Zone]:
 
 def resistance_zones(zones: tuple[Zone, ...]) -> list[Zone]:
     return [z for z in zones if z.role == "resistance"]
+
+
+def zones_with_origin(zones: Sequence[Zone] | tuple[Zone, ...], origin: str) -> list[Zone]:
+    return [z for z in zones if z.origin == origin]
 
 
 def touched_support(row: pd.Series, zones: list[Zone]) -> Zone | None:

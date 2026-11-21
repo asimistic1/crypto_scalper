@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 
 from core.config import ANALYSIS_CANDLES, HTF_CANDLES
-from core.indicators import add_all_indicators
 
 OHLCV_COLS = (
     "time",
@@ -27,10 +26,7 @@ DAILY_MAX_BARS = 400
 
 
 def _slice_cols(df: pd.DataFrame) -> list[str]:
-    """Keep OHLCV + indicator columns when present (backtest precompute path)."""
-    base = [c for c in OHLCV_COLS if c in df.columns]
-    extra = [c for c in df.columns if c not in base and c not in ("time",)]
-    return base + extra
+    return [c for c in OHLCV_COLS if c in df.columns]
 
 
 def precompute_quote_volume_24h(close_ms: np.ndarray, quote_vol: np.ndarray) -> np.ndarray:
@@ -67,13 +63,7 @@ class BarWindows:
         htf_frames: dict[str, pd.DataFrame],
         daily: pd.DataFrame | None,
     ) -> BarWindows:
-        ltf = add_all_indicators(ltf.sort_values("time").reset_index(drop=True))
-        htf_frames = {
-            k: add_all_indicators(frame.sort_values("time").reset_index(drop=True))
-            for k, frame in htf_frames.items()
-        }
-        if daily is not None and not daily.empty:
-            daily = daily.sort_values("time").reset_index(drop=True)
+        ltf = ltf.sort_values("time").reset_index(drop=True)
         ct = ltf["close_time"].to_numpy(dtype=np.int64)
         qv = ltf["quote_volume"].to_numpy(dtype=np.float64) if "quote_volume" in ltf.columns else np.zeros(len(ltf))
         htf_cm: dict[str, np.ndarray] = {}

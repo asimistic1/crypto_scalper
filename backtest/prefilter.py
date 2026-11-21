@@ -46,10 +46,12 @@ def candidate_mask(df: pd.DataFrame, *, min_bars: int = 250) -> np.ndarray:
     )
 
     vol_s = pd.Series(vol)
-    # lookback 10 + signal bar (matches breakout_retest window)
-    brk_vol = vol_s.rolling(11, min_periods=1).max().to_numpy() >= 1.45
-    brk_now = vol >= 1.45
-    breakout = brk_vol | brk_now
+    # Previous 10 bars (excl. signal), + spike on signal bar
+    prev10_max = vol_s.shift(1).rolling(10, min_periods=1).max().fillna(0.0).to_numpy()
+    brk_vol = prev10_max >= 1.45
+    brk_now = vol >= 1.5
+    brk_candle = close != open_
+    breakout = (brk_vol | brk_now) & brk_candle
 
     candidates = long_pull | short_pull | breakout
     mask[min_bars - 1 :] = candidates[min_bars - 1 :]

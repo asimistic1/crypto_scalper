@@ -9,6 +9,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backtest.config import BacktestConfig
+from backtest.costs import cost_sensitivity_slice
+
 MIN_BUCKET_TRADES = 100
 
 
@@ -38,15 +41,36 @@ def bootstrap_mean_ci(values: list[float], n_boot: int = 500, seed: int = 42) ->
     return float(np.mean(values)), lo, hi
 
 
-def core_metrics(trades: pd.DataFrame) -> dict[str, Any]:
-    filled = trades[trades["filled"]]
-    n_sig = len(trades)
+def core_metrics(
+    trades: pd.DataFrame,
+    *,
+    raw_signals: int | None = None,
+    cfg: BacktestConfig | None = None,
+) -> dict[str, Any]:
+    """trades includes skipped rows (position_busy) with filled=False for signal counts."""
+    skipped = trades[trades.get("skip_reason", "") == "position_busy"] if "skip_reason" in trades.columns else pd.DataFrame()
+    sim_rows = trades[trades.get("skip_reason", "") != "position_busy"] if "skip_reason" in trades.columns else trades
+    n_sig = raw_signals if raw_signals is not None else len(sim_rows) + len(skipped)
+    filled = sim_rows[sim_rows["filled"]]
     n = len(filled)
+    taken = len(sim_rows)
     if n == 0:
-        return {"trades": 0, "fill_rate": 0.0}
-    wins = filled[filled["outcome"].isin(("TP1", "TP2", "TP3", "BE"))]
-    wr = len(wins) / n
-    wlo, whi = wilson_ci(len(wins), n)
+        out: dict[str, Any] = {
+            "signals": n_sig,
+            "trades_taken": taken,
+            "trades": 0,
+            "skipped_busy": len(skipped),
+            "fill_rate": 0.0,
+        }
+        if cfg is not None:
+            out["cost_1_5_expectancy"] = 0.0
+            out["cost_2_0_expectancy"] = 0.0
+        return out
+    if "tp1_before_sl" not in filled.columns:
+        wins_mask = filled["outcome"].isin(("TP1", "TP2", "TP3"))
+    else:
+        wins_mask = filled["tp1_before_sl"].astype(bool)
+    wlo, whi = wilson_ci(int(wins_mask.sum()), n)
     r_net = filled["r_net"].astype(float)
     expectancy, exp_lo, exp_hi = bootstrap_mean_ci(r_net.tolist())
     gross_w = filled.loc[r_net > 0, "r_net"].sum()
@@ -54,11 +78,13 @@ def core_metrics(trades: pd.DataFrame) -> dict[str, Any]:
     pf = float(gross_w / gross_l) if gross_l > 0 else float("inf")
     eq = r_net.cumsum()
     dd = float((eq - eq.cummax()).min())
-    return {
+    out = {
         "signals": n_sig,
+        "trades_taken": taken,
         "trades": n,
-        "fill_rate": n / n_sig if n_sig else 0.0,
-        "win_rate": wr,
+        "skipped_busy": len(skipped),
+        "fill_rate": n / taken if taken else 0.0,
+        "win_rate": float(wins_mask.mean()),
         "win_rate_ci": (wlo, whi),
         "expectancy_r": expectancy,
         "expectancy_ci": (exp_lo, exp_hi),
@@ -68,12 +94,21 @@ def core_metrics(trades: pd.DataFrame) -> dict[str, Any]:
         "avg_win_r": float(filled.loc[r_net > 0, "r_net"].mean()) if (r_net > 0).any() else 0.0,
         "avg_loss_r": float(filled.loc[r_net < 0, "r_net"].mean()) if (r_net < 0).any() else 0.0,
     }
+    if cfg is not None:
+        out["cost_1_5_expectancy"] = cost_sensitivity_slice(filled, cfg, 1.5)["expectancy_r"]
+        out["cost_2_0_expectancy"] = cost_sensitivity_slice(filled, cfg, 2.0)["expectancy_r"]
+    return out
 
 
 def score_calibration(trades: pd.DataFrame) -> pd.DataFrame:
     filled = trades[trades["filled"]].copy()
     if filled.empty:
         return pd.DataFrame()
+    if "tp1_before_sl" in filled.columns:
+        win = filled["tp1_before_sl"].astype(bool)
+    else:
+        win = filled["outcome"].isin(("TP1", "TP2", "TP3"))
+    filled["_win"] = win
     filled["bucket"] = pd.cut(
         filled["score"],
         bins=[55, 60, 65, 70, 75, 80, 85, 90, 95, 100],
@@ -82,8 +117,8 @@ def score_calibration(trades: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for b, grp in filled.groupby("bucket", observed=True):
         n = len(grp)
-        wins = (grp["outcome"].isin(("TP1", "TP2", "TP3", "BE"))).sum()
-        lo, hi = wilson_ci(int(wins), n)
+        wins = int(grp["_win"].sum())
+        lo, hi = wilson_ci(wins, n)
         rows.append(
             {
                 "bucket": str(b),
@@ -98,28 +133,27 @@ def score_calibration(trades: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _rankdata(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=np.float64)
+    ranks[order] = np.arange(1, len(values) + 1, dtype=np.float64)
+    return ranks
+
+
 def spearman_score_r(trades: pd.DataFrame) -> float | None:
     filled = trades[trades["filled"]]
     if len(filled) < 10:
         return None
-    return float(filled["score"].corr(filled["r_net"], method="spearman"))
-
-
-def random_baseline_percentile(
-    strategy_r: list[float],
-    rng: random.Random,
-    *,
-    n_mc: int = 200,
-) -> float:
-    if not strategy_r:
-        return 0.0
-    strat = float(np.mean(strategy_r))
-    better = 0
-    for _ in range(n_mc):
-        sample = [rng.gauss(0, 1) for _ in strategy_r]
-        if float(np.mean(sample)) < strat:
-            better += 1
-    return better / n_mc * 100.0
+    x = filled["score"].astype(float).to_numpy()
+    y = filled["r_net"].astype(float).to_numpy()
+    rx = _rankdata(x)
+    ry = _rankdata(y)
+    rx = rx - rx.mean()
+    ry = ry - ry.mean()
+    denom = float(np.sqrt((rx**2).sum() * (ry**2).sum()))
+    if denom <= 0:
+        return None
+    return float((rx * ry).sum() / denom)
 
 
 def monte_carlo_max_dd(trades: pd.DataFrame, *, n: int = 1000, seed: int = 42) -> float:
@@ -137,19 +171,6 @@ def monte_carlo_max_dd(trades: pd.DataFrame, *, n: int = 1000, seed: int = 42) -
         dds.append(dd)
     dds.sort()
     return dds[int(0.95 * len(dds)) - 1]
-
-
-def cost_sensitivity(trades: pd.DataFrame, mult: float) -> dict[str, float]:
-    """Approximate: scale net R down proportionally to extra fees."""
-    filled = trades[trades["filled"]].copy()
-    if filled.empty:
-        return {"expectancy_r": 0.0, "profit_factor": 0.0}
-    fee_drag = (mult - 1.0) * 0.05
-    adj = filled["r_net"] - fee_drag
-    return {
-        "expectancy_r": float(adj.mean()),
-        "profit_factor": core_metrics(filled.assign(r_net=adj))["profit_factor"],
-    }
 
 
 def too_good_alarm(metrics: dict[str, Any], scope: str) -> list[str]:

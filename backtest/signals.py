@@ -4,7 +4,6 @@ Exact signal generation via core.setup_builder.build_setup (two-stage prefilter)
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -20,6 +19,7 @@ from tqdm import tqdm
 from backtest.history import ensure_indicators, load_history
 from backtest.paths import SIGNALS_DIR, history_parquet
 from backtest.prefilter import candidate_mask, mask_fraction
+from backtest.signal_cache import cache_key
 from backtest.windows import BarWindows
 from core.config import HIGHER_TIMEFRAMES
 from core.exchange_info import tick_size
@@ -69,19 +69,6 @@ def signal_cache_path(symbol: str, tf: str) -> Path:
 
 def signal_meta_path(symbol: str, tf: str) -> Path:
     return SIGNALS_DIR / f"{symbol.upper()}_{tf}.meta.json"
-
-
-def cache_key(symbol: str, tf: str) -> str:
-    path = history_parquet(symbol, tf)
-    stat = path.stat() if path.exists() else None
-    payload = {
-        "git": _git_hash(),
-        "symbol": symbol,
-        "tf": tf,
-        "rows": int(stat.st_size) if stat else 0,
-        "mtime": stat.st_mtime if stat else 0,
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def setup_row(symbol: str, tf: str, i: int, close_ms: int, setup: Setup) -> dict:

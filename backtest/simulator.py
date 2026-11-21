@@ -65,6 +65,9 @@ class SimTrade:
     mae_r: float
     mfe_r: float
     filled: bool
+    tp1_before_sl: bool = False
+    exit_bar: int | None = None
+    fill_bar: int | None = None
 
 
 def _fee_rates(cfg: BacktestConfig, *, is_maker: bool) -> float:
@@ -734,7 +737,13 @@ def _mk(
     mfe,
     *,
     filled: bool,
+    tp1_before_sl: bool | None = None,
+    exit_bar: int | None = None,
+    fill_bar: int | None = None,
 ) -> SimTrade:
+    if tp1_before_sl is None:
+        oc = outcome.value if isinstance(outcome, Outcome) else str(outcome)
+        tp1_before_sl = oc in (Outcome.TP1.value, Outcome.TP2.value, Outcome.TP3.value)
     return SimTrade(
         symbol=symbol,
         timeframe=timeframe,
@@ -757,6 +766,9 @@ def _mk(
         mae_r=mae,
         mfe_r=mfe,
         filled=filled,
+        tp1_before_sl=bool(tp1_before_sl),
+        exit_bar=exit_bar,
+        fill_bar=fill_bar,
     )
 
 

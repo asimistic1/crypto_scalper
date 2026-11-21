@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from backtest.history import as_of_from_close_ms, ensure_indicators, load_history, quote_volume_24h_at
+from backtest.history import as_of_from_close_ms, ensure_indicators, quote_volume_24h_at
+from backtest.history_cache import get_ohlc
 
 PK = ZoneInfo("Asia/Karachi")
 
@@ -49,7 +50,9 @@ def feature_row(
         **{f"htf_{k}": v for k, v in htf_summary.items()},
         "filled": bool(labels.get("filled")),
         "outcome": labels.get("outcome"),
-        "tp1_before_sl": labels.get("outcome") in ("TP1", "TP2", "TP3", "BE"),
+        "tp1_before_sl": bool(labels.get("tp1_before_sl"))
+        if labels.get("tp1_before_sl") is not None
+        else labels.get("outcome") in ("TP1", "TP2", "TP3"),
         "net_r": float(labels.get("r_net") or 0),
     }
 
@@ -59,10 +62,14 @@ def build_dataset(signals: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     rows: list[dict] = []
     trade_map = trades.set_index("setup_id").to_dict("index") if not trades.empty else {}
+    ind_cache: dict[tuple[str, str], pd.DataFrame] = {}
     for _, sig in signals.iterrows():
         sym = str(sig["symbol"])
         tf = str(sig["timeframe"])
-        df = ensure_indicators(load_history(sym, tf))
+        key = (sym, tf)
+        if key not in ind_cache:
+            ind_cache[key] = ensure_indicators(get_ohlc(sym, tf).df)
+        df = ind_cache[key]
         bi = int(sig["bar_index"])
         bar = df.iloc[bi]
         as_of = as_of_from_close_ms(int(bar["close_time"]))

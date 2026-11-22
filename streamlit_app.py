@@ -17,7 +17,7 @@ from core.data import TOP_SYMBOLS_FALLBACK
 from core.rate_limit import BinanceCooldownActive, banner_message, is_in_cooldown
 from core.symbol_ranking import display_to_rest
 from core.weight_budget import weight_used_this_minute
-from ui.setup_card import render_setup_card
+from ui.chart_analysis import render_chart_analysis
 
 ANALYZE_DEBOUNCE_SECONDS = 3
 
@@ -49,6 +49,7 @@ def _init_session() -> None:
         "timeframe": "15m",
         "quote_volumes": {},
         "analysis_setup": None,
+        "chart_analysis": None,
         "analysis_overlays": {},
         "analysis_diag": None,
         "last_analyzed_close_ms": 0,
@@ -125,6 +126,7 @@ def _run_analysis(toggles: dict[str, bool]) -> None:
         return
 
     st.session_state["analysis_setup"] = result.setup
+    st.session_state["chart_analysis"] = result.chart_analysis
     st.session_state["analysis_overlays"] = result.overlays
     st.session_state["analysis_diag"] = result.diagnostics
     st.session_state["last_analyzed_close_ms"] = result.last_close_ms
@@ -189,7 +191,7 @@ _init_session()
 _storage_ready()
 
 st.title("Crypto Scalper")
-st.caption("Binance USDT-M Perpetual · live WebSocket chart + setup engine")
+st.caption("Manual trading assistant — chart analysis and planning only (not automated signals)")
 
 if is_in_cooldown():
     st.warning(f"⏳ REST cooldown: {banner_message()}")
@@ -218,7 +220,7 @@ with st.sidebar:
         "swings": st.checkbox("Swing markers", True),
         "emas": st.checkbox("EMAs", True),
         "vwap": st.checkbox("VWAP", False),
-        "setup_lines": st.checkbox("Setup lines", True),
+        "show_patterns": st.checkbox("Show detected patterns", False),
     }
 
     if st.button("Analyze", use_container_width=True, type="primary"):
@@ -275,17 +277,11 @@ def _chart_and_setup_panel_body() -> None:
 
     trigger = _handle_chart_event(chart_event if isinstance(chart_event, dict) else None)
     _maybe_analyze(toggles, trigger)
-    setup = st.session_state.get("analysis_setup")
-
     with setup_col:
-        st.subheader("Setup Card")
-        if setup:
-            render_setup_card(
-                setup,
-                display_symbol,
-                price_precision=price_precision(rest),
-                live_status=st.session_state.get("last_chart_status"),
-            )
+        st.subheader("Chart Analysis")
+        analysis = st.session_state.get("chart_analysis")
+        if analysis:
+            render_chart_analysis(analysis, price_precision=price_precision(rest))
         else:
             st.info("Analyzing…")
 
@@ -337,7 +333,6 @@ def _missed_candle_guard_body() -> None:
                 "swings": True,
                 "emas": True,
                 "vwap": False,
-                "setup_lines": True,
             }
             _run_analysis(toggles)
             _record_analyze()

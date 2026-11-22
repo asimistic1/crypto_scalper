@@ -14,7 +14,7 @@ import pandas as pd
 from core.config import HIGHER_TIMEFRAMES
 from core.exchange_info import binance_server_time_ms, price_precision, tick_size
 from core.levels import find_swings, nearest_zones, structure_for_symbol, swings_confirmed_as_of
-from core.models import Direction, Setup
+from core.models import Setup
 from core.security import validate_symbol_rest
 
 
@@ -35,6 +35,7 @@ class AnalysisResult:
     overlays: dict[str, Any]
     diagnostics: AnalysisDiagnostics = field(default_factory=AnalysisDiagnostics)
     last_close_ms: int = 0
+    chart_analysis: Any = None
 
 
 def _as_of_from_df(df: pd.DataFrame) -> datetime:
@@ -92,7 +93,7 @@ def _build_chart_overlays(
     toggles: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     from core.indicators import add_all_indicators
-    from core.live_chart import merge_overlays, setup_to_overlay_dict
+    from core.live_chart import merge_overlays
 
     toggles = toggles or {}
     enriched = add_all_indicators(ltf)
@@ -137,23 +138,8 @@ def _build_chart_overlays(
                     }
                 )
 
-    if setup.direction != Direction.NO_TRADE and toggles.get("setup_lines", True):
-        sig_ts = setup.signal_candle_time
-        if sig_ts.tzinfo is None:
-            sig_ts = sig_ts.replace(tzinfo=UTC)
-        sec = int(sig_ts.timestamp())
-        markers.append(
-            {
-                "time": sec,
-                "position": "aboveBar" if setup.direction == Direction.LONG else "belowBar",
-                "shape": "arrowUp" if setup.direction == Direction.LONG else "arrowDown",
-                "color": "#2962FF",
-                "text": "Signal",
-            }
-        )
-
-    setup_dict = setup_to_overlay_dict(setup) if toggles.get("setup_lines", True) else None
-    return merge_overlays(setup=setup if setup_dict else None, zones=zone_payload, markers=markers)
+    # Phase 4: no automatic entry/SL/TP overlays — zones/swings/EMAs/VWAP only.
+    return merge_overlays(setup=None, zones=zone_payload, markers=markers)
 
 
 def run_analysis(
@@ -166,9 +152,10 @@ def run_analysis(
     """Fetch candles, build setup, prepare chart overlays."""
     from core.candle_store import get_many
     from core.indicators import add_all_indicators
+    from core.market_analysis import build_chart_analysis
     from core.models import no_trade
+    from core.pattern_stats import strategy_warning
     from core.setup_builder import build_setup
-    from core.storage import save_setup
     from core.symbol_ranking import display_to_rest
 
     rest = display_to_rest(display_symbol)
@@ -240,8 +227,21 @@ def run_analysis(
     )
     diag.setup_ms = (time.perf_counter() - t3) * 1000.0
 
-    if setup.direction != Direction.NO_TRADE:
-        save_setup(setup)
+    toggles = toggles or {}
+    show_patterns = bool(toggles.get("show_patterns", False))
+    warn_fn = lambda strat: strategy_warning(rest, timeframe, strat)  # noqa: E731
+    chart_analysis = build_chart_analysis(
+        display_symbol,
+        rest,
+        timeframe,
+        ltf_df,
+        htf_dfs,
+        setup,
+        show_patterns=show_patterns,
+        warning_for=warn_fn,
+        enriched_row=ltf_df.iloc[-1],
+        tick_size=tick,
+    )
 
     overlays = _build_chart_overlays(ltf_df, setup, as_of, rest, toggles)
-    return AnalysisResult(setup, overlays, diag, last_close_ms=last_close_ms)
+    return AnalysisResult(setup, overlays, diag, last_close_ms=last_close_ms, chart_analysis=chart_analysis)

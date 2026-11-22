@@ -86,6 +86,8 @@ def render_live_chart(
     streaming_enabled: bool = True,
     tick_size: float = 0.0,
     toggles: dict[str, bool] | None = None,
+    click_pick: str | None = None,
+    planner_overlays: list[dict[str, Any]] | None = None,
 ) -> Any:
     """
     Render the chart component (constant key — WS stays connected).
@@ -98,7 +100,7 @@ def render_live_chart(
         "swings": True,
         "emas": True,
         "vwap": False,
-        "setup_lines": True,
+        "setup_lines": False,
     }
     if toggles:
         default_toggles.update(toggles)
@@ -112,8 +114,12 @@ def render_live_chart(
         history_limit=min(int(history_limit), 1000),
         streaming_enabled=bool(streaming_enabled),
         fallback_candles=_df_to_candle_payload(fallback_candles),
-        overlays=overlays or {},
+        overlays={
+            **(overlays or {}),
+            "planner_lines": planner_overlays or (overlays or {}).get("planner_lines") or [],
+        },
         toggles=default_toggles,
+        click_pick=click_pick or "",
         theme="dark",
         key=_COMPONENT_KEY,
         default=None,

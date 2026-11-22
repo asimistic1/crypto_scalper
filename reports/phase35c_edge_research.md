@@ -1,6 +1,6 @@
 # Phase 3.5c — Edge research
 
-_Generated 2026-11-22T18:59:48.876733+00:00 | commit `4ab78204ea3b998440b0f49fa3e42b2dcbacbd91`_
+_Generated 2026-11-22T19:02:25.549837+00:00 | commit `0ab75d4132132ae240aed05befad3f0571cd5dc1`_
 
 ## Feature eligibility (Phase 3.5c+)
 
@@ -772,3 +772,25 @@ PASS thresholds: ≥90% non-null, ≥20 unique values (IS).
 | has_pullback | 4 | 0.0000 | 0.0000 | 0.0000 | True | 164 | True |
 | has_pullback | 12 | 0.0000 | 0.0000 | 0.0000 | True | 164 | True |
 | has_pullback | 24 | 0.0000 | 0.0000 | 0.0000 | True | 164 | True |
+
+## OOS confirmation
+
+### BTCUSDT
+
+_NO FEATURE QUALIFIES (IS)_
+
+**Verdict (BTCUSDT)**: noise
+
+### ETHUSDT
+
+- `above_ema200_1h` horizon 24 *(OOS already seen in Phase 3.5 — treat cautiously)*
+  - conservative: trades=1 win=0.0% net_E%=-1.588 PF=0.00
+  - low_fee: trades=1 win=0.0% net_E%=-1.568 PF=0.00
+
+**Verdict (ETHUSDT)**: insufficient OOS trades
+
+### SOLUSDT
+
+_NO FEATURE QUALIFIES (IS)_
+
+**Verdict (SOLUSDT)**: noise

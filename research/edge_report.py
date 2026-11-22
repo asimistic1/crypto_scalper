@@ -373,7 +373,11 @@ def run_pipeline(symbols: list[str], phase: str) -> None:
             oos_md.append(_df_to_md(block["ic_oos"], 30))
             oos_md.append("")
         (REPORTS_DIR / f"phase{PHASE_TAG}_oos.md").write_text("\n".join(oos_md), encoding="utf-8")
-        report = build_final_report(cov_table, is_results, oos_results)
+        is_from_oos = [
+            {"symbol": b["symbol"], "ic_is": b["ic_is"], "picks": b["picks"]}
+            for b in oos_results
+        ]
+        report = build_final_report(cov_table, is_results if is_results else is_from_oos, oos_results)
         (REPORTS_DIR / f"phase{PHASE_TAG}_edge_research.md").write_text(report, encoding="utf-8")
         print(f"Wrote {REPORTS_DIR / f'phase{PHASE_TAG}_edge_research.md'}")
 

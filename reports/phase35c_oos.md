@@ -1,0 +1,105 @@
+# Phase 3.5c OOS confirmation
+
+_commit `0ab75d4132132ae240aed05befad3f0571cd5dc1`_
+
+## BTCUSDT: **noise**
+| feature | horizon | mean_ic | ic_tstat | ic_sign_pct | likely_noise | n_features_tested | oos_already_seen |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| taker_buy_ratio | 1 | -0.0100 | -0.7610 | 0.7273 | True | 164 | True |
+| taker_buy_ratio | 4 | -0.0108 | -0.7098 | 0.5455 | True | 164 | True |
+| taker_buy_ratio | 12 | -0.0148 | -1.2096 | 0.5455 | True | 164 | True |
+| taker_buy_ratio | 24 | -0.0097 | -0.6854 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 1 | -0.0073 | -0.5255 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 4 | -0.0054 | -0.3902 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 12 | -0.0062 | -0.5715 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 24 | 0.0005 | 0.0407 | 0.4545 | True | 164 | True |
+| taker_buy_ratio_z72 | 1 | -0.0091 | -0.6571 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z72 | 4 | -0.0064 | -0.4667 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_z72 | 12 | -0.0063 | -0.4659 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_z72 | 24 | -0.0000 | -0.0017 | 0.4545 | True | 164 | True |
+| taker_delta_4h | 1 | -0.0164 | -1.1738 | 0.6364 | True | 164 | True |
+| taker_delta_4h | 4 | -0.0276 | -2.0710 | 0.8182 | True | 164 | True |
+| taker_delta_4h | 12 | -0.0075 | -0.3643 | 0.4545 | True | 164 | True |
+| taker_delta_4h | 24 | -0.0187 | -0.7609 | 0.7273 | True | 164 | True |
+| taker_delta_12h | 1 | -0.0114 | -1.2363 | 0.7273 | True | 164 | True |
+| taker_delta_12h | 4 | -0.0268 | -1.7332 | 0.6364 | True | 164 | True |
+| taker_delta_12h | 12 | -0.0094 | -0.2866 | 0.5455 | True | 164 | True |
+| taker_delta_12h | 24 | -0.0499 | -1.2998 | 0.8182 | True | 164 | True |
+| taker_delta_24h | 1 | -0.0226 | -2.1391 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 4 | -0.0494 | -2.2062 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 12 | -0.0664 | -1.7790 | 0.8182 | True | 164 | True |
+| taker_delta_24h | 24 | -0.0793 | -1.9019 | 0.8182 | True | 164 | True |
+| taker_buy_ratio_15m | 1 | -0.0128 | -0.9010 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m | 4 | 0.0034 | 0.3312 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m | 12 | -0.0065 | -0.8925 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_15m | 24 | 0.0006 | 0.1050 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 1 | -0.0143 | -0.9039 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 4 | 0.0013 | 0.1173 | 0.4545 | True | 164 | True |
+
+## ETHUSDT: **insufficient OOS trades**
+| feature | horizon | mean_ic | ic_tstat | ic_sign_pct | likely_noise | n_features_tested | oos_already_seen |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| taker_buy_ratio | 1 | -0.0074 | -0.5951 | 0.6364 | True | 164 | True |
+| taker_buy_ratio | 4 | 0.0002 | 0.0244 | 0.4545 | True | 164 | True |
+| taker_buy_ratio | 12 | -0.0069 | -0.4492 | 0.4545 | True | 164 | True |
+| taker_buy_ratio | 24 | 0.0060 | 0.3285 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_z24 | 1 | -0.0019 | -0.1611 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 4 | 0.0026 | 0.2770 | 0.3636 | True | 164 | True |
+| taker_buy_ratio_z24 | 12 | -0.0034 | -0.3264 | 0.4545 | True | 164 | True |
+| taker_buy_ratio_z24 | 24 | 0.0082 | 0.9657 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_z72 | 1 | -0.0044 | -0.3466 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z72 | 4 | 0.0040 | 0.4414 | 0.3636 | True | 164 | True |
+| taker_buy_ratio_z72 | 12 | 0.0009 | 0.0525 | 0.4545 | True | 164 | True |
+| taker_buy_ratio_z72 | 24 | 0.0135 | 0.7754 | 0.7273 | True | 164 | True |
+| taker_delta_4h | 1 | -0.0127 | -1.4654 | 0.6364 | True | 164 | True |
+| taker_delta_4h | 4 | -0.0179 | -1.0319 | 0.7273 | True | 164 | True |
+| taker_delta_4h | 12 | -0.0068 | -0.1778 | 0.5455 | True | 164 | True |
+| taker_delta_4h | 24 | 0.0069 | 0.1422 | 0.4545 | True | 164 | True |
+| taker_delta_12h | 1 | -0.0189 | -1.3931 | 0.8182 | True | 164 | True |
+| taker_delta_12h | 4 | -0.0360 | -1.4222 | 0.7273 | True | 164 | True |
+| taker_delta_12h | 12 | -0.0087 | -0.1658 | 0.6364 | True | 164 | True |
+| taker_delta_12h | 24 | -0.0179 | -0.2674 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 1 | -0.0133 | -1.2180 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 4 | -0.0268 | -0.9697 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 12 | -0.0223 | -0.4033 | 0.6364 | True | 164 | True |
+| taker_delta_24h | 24 | -0.0297 | -0.3659 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_15m | 1 | 0.0246 | 2.0165 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_15m | 4 | 0.0099 | 0.6967 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_15m | 12 | 0.0052 | 0.3194 | 0.4545 | True | 164 | True |
+| taker_buy_ratio_15m | 24 | 0.0157 | 1.3108 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 1 | 0.0204 | 1.6931 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 4 | 0.0073 | 0.5867 | 0.6364 | True | 164 | True |
+
+## SOLUSDT: **noise**
+| feature | horizon | mean_ic | ic_tstat | ic_sign_pct | likely_noise | n_features_tested | oos_already_seen |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| taker_buy_ratio | 1 | -0.0282 | -2.4916 | 0.8182 | True | 164 | True |
+| taker_buy_ratio | 4 | -0.0117 | -0.8159 | 0.6364 | True | 164 | True |
+| taker_buy_ratio | 12 | -0.0051 | -0.2429 | 0.7273 | True | 164 | True |
+| taker_buy_ratio | 24 | 0.0118 | 0.5969 | 0.4545 | True | 164 | True |
+| taker_buy_ratio_z24 | 1 | -0.0258 | -2.1401 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_z24 | 4 | -0.0106 | -0.7859 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_z24 | 12 | -0.0071 | -0.3439 | 0.9091 | True | 164 | True |
+| taker_buy_ratio_z24 | 24 | -0.0014 | -0.0846 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_z72 | 1 | -0.0243 | -1.9804 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_z72 | 4 | -0.0064 | -0.3788 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_z72 | 12 | 0.0024 | 0.0935 | 0.1818 | True | 164 | True |
+| taker_buy_ratio_z72 | 24 | 0.0195 | 0.8042 | 0.6364 | True | 164 | True |
+| taker_delta_4h | 1 | -0.0299 | -2.5707 | 0.7273 | True | 164 | True |
+| taker_delta_4h | 4 | -0.0260 | -1.1181 | 0.7273 | True | 164 | True |
+| taker_delta_4h | 12 | -0.0008 | -0.0221 | 0.5455 | True | 164 | True |
+| taker_delta_4h | 24 | -0.0051 | -0.1511 | 0.5455 | True | 164 | True |
+| taker_delta_12h | 1 | -0.0237 | -1.7109 | 0.6364 | True | 164 | True |
+| taker_delta_12h | 4 | -0.0271 | -1.1103 | 0.7273 | True | 164 | True |
+| taker_delta_12h | 12 | -0.0177 | -0.4594 | 0.7273 | True | 164 | True |
+| taker_delta_12h | 24 | -0.0351 | -0.8992 | 0.6364 | True | 164 | True |
+| taker_delta_24h | 1 | -0.0242 | -2.3759 | 0.8182 | True | 164 | True |
+| taker_delta_24h | 4 | -0.0430 | -1.9799 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 12 | -0.0555 | -1.5015 | 0.7273 | True | 164 | True |
+| taker_delta_24h | 24 | -0.0322 | -0.8061 | 0.6364 | True | 164 | True |
+| taker_buy_ratio_15m | 1 | 0.0031 | 0.2943 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_15m | 4 | 0.0009 | 0.1442 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m | 12 | 0.0015 | 0.0749 | 0.5455 | True | 164 | True |
+| taker_buy_ratio_15m | 24 | 0.0157 | 1.0848 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 1 | 0.0019 | 0.1607 | 0.7273 | True | 164 | True |
+| taker_buy_ratio_15m_z24 | 4 | -0.0013 | -0.1472 | 0.5455 | True | 164 | True |

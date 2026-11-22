@@ -1,0 +1,17 @@
+{
+  "symbol": "ETHUSDT",
+  "picks": [
+    {
+      "feature": "above_ema200_1h",
+      "horizon": 24,
+      "mean_ic": -0.10875748718032535,
+      "ic_tstat": -3.67176349063064,
+      "ic_sign_pct": 0.8666666666666667,
+      "is_rule_net_e_pct_low_fee": 0.025280319585948622,
+      "is_rule_trades": 429,
+      "oos_already_seen": true
+    }
+  ],
+  "git": "5a439be984a0caf865a1b1523d8366183ec7e160",
+  "ts": "2026-11-22T18:48:57.940318+00:00"
+}

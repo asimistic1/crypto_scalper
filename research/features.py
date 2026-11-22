@@ -25,8 +25,6 @@ DERIVATIVES_FEATURES = frozenset(
         "taker_ls_vol_ratio_z72",
         "funding_rate",
         "funding_z_30d",
-        "funding_extreme_hi",
-        "funding_extreme_lo",
         "basis_pct",
         "basis_z72",
         "spot_fut_basis_pct",

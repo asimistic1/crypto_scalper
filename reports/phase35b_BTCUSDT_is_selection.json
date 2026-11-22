@@ -1,0 +1,17 @@
+{
+  "symbol": "BTCUSDT",
+  "picks": [
+    {
+      "feature": "open_interest_value",
+      "horizon": 12,
+      "mean_ic": -0.22150667603843552,
+      "ic_tstat": -10.29872577499252,
+      "ic_sign_pct": 1.0,
+      "is_rule_net_e_pct_low_fee": 0.014889202160123204,
+      "is_rule_trades": 443,
+      "oos_already_seen": false
+    }
+  ],
+  "git": "5a439be984a0caf865a1b1523d8366183ec7e160",
+  "ts": "2026-11-22T18:48:43.214780+00:00"
+}

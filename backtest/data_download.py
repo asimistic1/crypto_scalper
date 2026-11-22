@@ -276,7 +276,10 @@ def _parse_metrics_csv(raw: bytes) -> pd.DataFrame:
     df = pd.read_csv(_io.StringIO(text))
     if "create_time" in df.columns:
         df["time"] = pd.to_datetime(df["create_time"], utc=True)
-        df["close_time"] = (df["time"].astype("int64") // 10**6) + 300_000 - 1
+        # create_time is bar *open* (UTC); 5m close in ms for merge_asof with klines
+        df["close_time"] = (
+            pd.to_datetime(df["time"], utc=True).map(lambda t: int(t.timestamp() * 1000)) + 300_000 - 1
+        )
     df = df.rename(
         columns={
             "sum_open_interest": "open_interest",

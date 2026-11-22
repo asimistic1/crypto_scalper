@@ -8,6 +8,31 @@ import pandas as pd
 from backtest.config import BacktestConfig
 from backtest.history import ensure_indicators, load_history
 from backtest.paths import SIGNALS_DIR, symbol_aux_parquet
+from research.aux_data import load_funding, load_metrics_5m, merge_asof_features
+
+DERIVATIVES_FEATURES = frozenset(
+    {
+        "open_interest",
+        "open_interest_value",
+        "oi_chg_1h",
+        "oi_chg_4h",
+        "oi_chg_24h",
+        "top_trader_ls_ratio",
+        "global_ls_ratio",
+        "taker_ls_vol_ratio",
+        "top_trader_ls_ratio_z72",
+        "global_ls_ratio_z72",
+        "taker_ls_vol_ratio_z72",
+        "funding_rate",
+        "funding_z_30d",
+        "funding_extreme_hi",
+        "funding_extreme_lo",
+        "basis_pct",
+        "basis_z72",
+        "spot_fut_basis_pct",
+        "spot_fut_basis_z72",
+    }
+)
 
 
 def _zscore(s: pd.Series, window: int) -> pd.Series:
@@ -30,14 +55,9 @@ def _load_signals_1h(symbol: str) -> pd.DataFrame:
     return grp
 
 
-def _asof_numeric(left: pd.DataFrame, right: pd.DataFrame, on: str, cols: list[str]) -> pd.DataFrame:
-    if right.empty:
-        for c in cols:
-            left[c] = np.nan
-        return left
-    r = right[["close_time", *cols]].sort_values("close_time")
-    merged = pd.merge_asof(left.sort_values("close_time"), r, on="close_time", direction="backward")
-    return merged
+def _asof_numeric(left: pd.DataFrame, right: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    merged = merge_asof_features(left, right, cols)
+    return merged.sort_values("close_time").reset_index(drop=True)
 
 
 def build_feature_table(
@@ -86,7 +106,7 @@ def build_feature_table(
     h4 = h4[["close_time", "close", "ema_50", "ema_200"]].rename(
         columns={"close": "close_4h", "ema_50": "ema50_4h", "ema_200": "ema200_4h"}
     )
-    base = _asof_numeric(base, h4, "close_time", ["close_4h", "ema50_4h", "ema200_4h"])
+    base = _asof_numeric(base, h4, ["close_4h", "ema50_4h", "ema200_4h"])
     base["above_ema50_4h"] = (base["close_4h"] > base["ema50_4h"]).astype(float)
     base["above_ema200_4h"] = (base["close_4h"] > base["ema200_4h"]).astype(float)
 
@@ -98,24 +118,40 @@ def build_feature_table(
     base["hour_utc"] = ts.dt.hour
     base["weekday"] = ts.dt.weekday
 
-    # Funding
-    fpath = symbol_aux_parquet(sym, "funding")
-    if fpath.exists():
-        fund = pd.read_parquet(fpath)
-        fund = fund.sort_values("calc_time")
-        fund["close_time"] = (pd.to_datetime(fund["calc_time"], utc=True).astype("int64") // 10**6)
-        fund = fund[["close_time", "last_funding_rate"]].rename(columns={"last_funding_rate": "funding_rate"})
-        base = _asof_numeric(base, fund, "close_time", ["funding_rate"])
-        base["funding_z_30d"] = _zscore(base["funding_rate"], 24 * 30)
-        base["funding_extreme_hi"] = (base["funding_rate"] >= base["funding_rate"].rolling(720).quantile(0.95)).astype(float)
-        base["funding_extreme_lo"] = (base["funding_rate"] <= base["funding_rate"].rolling(720).quantile(0.05)).astype(float)
+    fund = load_funding(sym)
+    if not fund.empty:
+        from research.aux_data import METRICS_TOLERANCE_MS
 
-    # Metrics 5m → asof on 1h
-    mpath = symbol_aux_parquet(sym, "metrics_5m")
-    if mpath.exists():
-        met = pd.read_parquet(mpath).sort_values("close_time")
-        cols = [c for c in ("open_interest", "open_interest_value", "top_trader_ls_ratio", "global_ls_ratio", "taker_ls_vol_ratio") if c in met.columns]
-        base = _asof_numeric(base, met, "close_time", cols)
+        base = merge_asof_features(
+            base, fund, ["funding_rate"], tolerance_ms=max(METRICS_TOLERANCE_MS, 8 * 3600 * 1000)
+        )
+        if base["funding_rate"].notna().any():
+            base["funding_z_30d"] = _zscore(base["funding_rate"], 24 * 30)
+            base["funding_extreme_hi"] = (
+                base["funding_rate"] >= base["funding_rate"].rolling(720, min_periods=100).quantile(0.95)
+            ).astype(float)
+            base["funding_extreme_lo"] = (
+                base["funding_rate"] <= base["funding_rate"].rolling(720, min_periods=100).quantile(0.05)
+            ).astype(float)
+        else:
+            base["funding_z_30d"] = float("nan")
+            base["funding_extreme_hi"] = float("nan")
+            base["funding_extreme_lo"] = float("nan")
+
+    met = load_metrics_5m(sym)
+    if not met.empty:
+        cols = [
+            c
+            for c in (
+                "open_interest",
+                "open_interest_value",
+                "top_trader_ls_ratio",
+                "global_ls_ratio",
+                "taker_ls_vol_ratio",
+            )
+            if c in met.columns
+        ]
+        base = _asof_numeric(base, met, cols)
         oi = base["open_interest"].astype(float)
         px = base["close"].astype(float)
         base["oi_chg_1h"] = oi.pct_change(1)
@@ -133,14 +169,14 @@ def build_feature_table(
     prem = symbol_aux_parquet(sym, "premium_1h")
     if prem.exists():
         pr = pd.read_parquet(prem)[["close_time", "close"]].rename(columns={"close": "premium_index"})
-        base = _asof_numeric(base, pr, "close_time", ["premium_index"])
+        base = _asof_numeric(base, pr, ["premium_index"])
         base["basis_pct"] = 100.0 * (base["premium_index"] / base["close"] - 1.0)
         base["basis_z72"] = _zscore(base["basis_pct"], 72)
 
     spot = symbol_aux_parquet(sym, "spot_1h")
     if spot.exists():
         sp = pd.read_parquet(spot)[["close_time", "close"]].rename(columns={"close": "spot_close"})
-        base = _asof_numeric(base, sp, "close_time", ["spot_close"])
+        base = _asof_numeric(base, sp, ["spot_close"])
         base["spot_fut_basis_pct"] = 100.0 * (base["close"] / base["spot_close"] - 1.0)
         base["spot_fut_basis_z72"] = _zscore(base["spot_fut_basis_pct"], 72)
 

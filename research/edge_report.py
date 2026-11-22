@@ -1,30 +1,33 @@
-"""Phase 3.5 — predictive power tests (IS exploration, OOS confirmation)."""
+"""Phase 3.5b — predictive tests with clean IS→OOS protocol."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from backtest.config import BacktestConfig
-from backtest.history import ensure_indicators, load_history
-from backtest.metrics import core_metrics
 from backtest.paths import REPO_ROOT
-from backtest.simulator import SimSignal, simulate_trade, trade_to_dict
 from backtest.split import filter_sample
-from core.models import Direction, EntryType
+from research.coverage import run_coverage
+from research.coverage import table_markdown as coverage_md
 from research.features import build_feature_table, feature_columns
+from research.rule_backtest import rule_summary, run_rule_backtest, thresholds_from_is
 from research.targets import add_forward_targets
 
 REPORTS_DIR = REPO_ROOT / "reports"
-IC_TSTAT_FLAG = 3.0
+IC_TSTAT_MIN = 3.0
+SIGN_MONTHS_MIN = 0.70
 HORIZONS = (1, 4, 12, 24)
 TARGET_SUFFIX = "fwd_net_low"
+OOS_ALREADY_SEEN = re.compile(r"(taker_|above_ema|realized_vol|atr_pct|weekday|setup_score|has_)", re.I)
 
 
 def _git_hash() -> str:
@@ -67,103 +70,15 @@ def monthly_ic(feature: pd.Series, target: pd.Series, months: pd.Series) -> tupl
     return mean, tstat, sign
 
 
-def quintile_spread(feature: pd.Series, target: pd.Series) -> dict[str, float]:
-    valid = feature.notna() & target.notna()
-    f = feature[valid]
-    y = target[valid]
-    if len(f) < 50:
-        return {}
-    try:
-        q = pd.qcut(f.rank(method="first"), 5, labels=[1, 2, 3, 4, 5])
-    except ValueError:
-        return {}
-    means = y.groupby(q, observed=False).mean()
-    return {f"q{k}": float(means.get(k, np.nan)) for k in range(1, 6)} | {
-        "top_minus_bottom": float(means.get(5, np.nan) - means.get(1, np.nan))
-    }
-
-
-def _rule_trades(
-    df: pd.DataFrame,
-    feature: str,
-    horizon: int,
-    cfg: BacktestConfig,
-    symbol: str,
-) -> pd.DataFrame:
-    """Top quintile long / bottom short, fixed hold; ATR-based 1R stop."""
-    ind = ensure_indicators(load_history(symbol, "1h"))
-    atr = ind["atr_14"].to_numpy(dtype=float) if "atr_14" in ind.columns else ind["close"].to_numpy() * 0.005
-    ct = ind["close_time"].to_numpy(dtype=np.int64)
-    f = df[feature]
-    try:
-        quint = pd.qcut(f.rank(method="first"), 5, labels=[1, 2, 3, 4, 5])
-    except ValueError:
-        return pd.DataFrame()
-    rows: list[dict] = []
-    busy = -1
-    for i in range(50, len(df) - horizon - 2):
-        if i <= busy:
-            continue
-        raw_q = quint.iloc[i]
-        if pd.isna(raw_q):
-            continue
-        qv = int(raw_q)
-        if qv == 5:
-            direction = Direction.LONG
-        elif qv == 1:
-            direction = Direction.SHORT
-        else:
-            continue
-        bar_i = int(np.searchsorted(ct, int(df["close_time"].iloc[i]), side="right")) - 1
-        if bar_i < 0 or bar_i + 1 >= len(ind):
-            continue
-        entry_i = bar_i + 1
-        entry = float(ind.iloc[entry_i]["open"])
-        r = float(atr[bar_i])
-        if r <= 0:
-            continue
-        sl = entry - r if direction == Direction.LONG else entry + r
-        sim = SimSignal(
-            direction=direction,
-            entry_type=EntryType.MARKET,
-            entry=entry,
-            stop_loss=sl,
-            tp1=entry + r if direction == Direction.LONG else entry - r,
-            tp2=entry + 2 * r if direction == Direction.LONG else entry - 2 * r,
-            tp3=entry + 3 * r if direction == Direction.LONG else entry - 3 * r,
-            signal_bar=entry_i - 1,
-            strategy="edge_rule",
-            score=60.0,
-            setup_id=f"edge_{i}",
-        )
-        hold_cfg = BacktestConfig(
-            max_hold_bars={**cfg.max_hold_bars, "1h": horizon},
-            taker_fee=cfg.taker_fee,
-            maker_fee=cfg.maker_fee,
-            slippage=cfg.slippage,
-            fee_model=cfg.fee_model,
-            low_fee_taker=cfg.low_fee_taker,
-            low_fee_maker=cfg.low_fee_maker,
-        )
-        trade = simulate_trade(
-            ind, sim, hold_cfg, exit_model="tp1_full", symbol=symbol, timeframe="1h"
-        )
-        d = trade_to_dict(trade)
-        d["close_time"] = int(df["close_time"].iloc[i])
-        rows.append(d)
-        busy = entry_i + horizon
-    return pd.DataFrame(rows)
-
-
-def run_ic_table(is_df: pd.DataFrame, features: list[str], n_tested: int) -> pd.DataFrame:
-    months = is_df["close_time"].map(_month_key)
+def run_ic_table(df: pd.DataFrame, features: list[str], n_tested: int) -> pd.DataFrame:
+    months = df["close_time"].map(_month_key)
     rows: list[dict] = []
     for feat in features:
         for h in HORIZONS:
             tgt = f"{TARGET_SUFFIX}_{h}"
-            if tgt not in is_df.columns:
+            if tgt not in df.columns:
                 continue
-            mean_ic, tstat, sign_pct = monthly_ic(is_df[feat], is_df[tgt], months)
+            mean_ic, tstat, sign_pct = monthly_ic(df[feat], df[tgt], months)
             rows.append(
                 {
                     "feature": feat,
@@ -171,219 +86,288 @@ def run_ic_table(is_df: pd.DataFrame, features: list[str], n_tested: int) -> pd.
                     "mean_ic": mean_ic,
                     "ic_tstat": tstat,
                     "ic_sign_pct": sign_pct,
-                    "likely_noise": abs(tstat) < IC_TSTAT_FLAG,
+                    "likely_noise": abs(tstat) < IC_TSTAT_MIN,
                     "n_features_tested": n_tested,
+                    "oos_already_seen": bool(OOS_ALREADY_SEEN.search(feat)),
                 }
             )
     return pd.DataFrame(rows)
 
 
-def pick_top_features(ic_df: pd.DataFrame, k: int = 5) -> list[tuple[str, int]]:
-    if ic_df.empty:
-        return []
-    ic_df = ic_df.sort_values("ic_tstat", key=abs, ascending=False)
-    seen: set[str] = set()
-    picked: list[tuple[str, int]] = []
-    for _, row in ic_df.iterrows():
-        f = str(row["feature"])
-        if f in seen:
-            continue
-        seen.add(f)
-        picked.append((f, int(row["horizon"])))
-        if len(picked) >= k:
-            break
-    return picked
-
-
-def correlation_matrix(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
-    cols = [f for f in features if f in df.columns]
-    if len(cols) < 2:
-        return pd.DataFrame()
-    ranked = df[cols].rank()
-    return ranked.corr()
-
-
-def verdict_row(mean_ic: float, tstat: float, quintile_spread_val: float, cost_rt: float) -> str:
-    if abs(tstat) < IC_TSTAT_FLAG:
-        return "noise"
-    if quintile_spread_val > cost_rt and mean_ic * quintile_spread_val > 0:
-        return "predictive after costs"
-    return "weak"
-
-
-def _df_to_md(table: pd.DataFrame, max_rows: int = 50) -> str:
+def _df_to_md(table: pd.DataFrame, max_rows: int = 80) -> str:
     if table.empty:
         return "_empty_"
     sub = table.head(max_rows)
     cols = list(sub.columns)
     lines = ["| " + " | ".join(cols) + " |", "| " + " | ".join("---" for _ in cols) + " |"]
     for _, row in sub.iterrows():
-        cells = [f"{row[c]:.4f}" if isinstance(row[c], (float, np.floating)) else str(row[c]) for c in cols]
+        cells = []
+        for c in cols:
+            v = row[c]
+            if isinstance(v, (float, np.floating)) and c not in ("horizon", "n_features_tested", "n_unique"):
+                cells.append(f"{v:.4f}")
+            else:
+                cells.append(str(v))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
-def build_markdown(
-    symbol: str,
-    is_ic: pd.DataFrame,
-    oos_ic: pd.DataFrame,
-    quintile_is: dict[str, Any],
-    quintile_oos: dict[str, Any],
-    rules_is: pd.DataFrame,
-    rules_oos: pd.DataFrame,
-    corr: pd.DataFrame,
-    n_features: int,
-    cost_rt: float,
-) -> str:
-    lines = [
-        f"# Phase 3.5 — Edge research ({symbol})",
-        "",
-        f"Generated {datetime.now(tz=UTC).isoformat()} | features tested: **{n_features}** "
-        f"(|t| < {IC_TSTAT_FLAG} flagged as likely noise)",
-        "",
-        "## IS selection (exploration)",
-        "",
-    ]
-    if not is_ic.empty:
-        lines.append(_df_to_md(is_ic, 40))
-    lines.append("")
-    lines.append("## OOS confirmation (single pass)")
-    lines.append("")
-    if not oos_ic.empty:
-        lines.append(_df_to_md(oos_ic, 40))
-    lines.append("")
-    lines.append("## Quintile spreads vs round-trip cost (low-fee)")
-    lines.append(f"Round-trip cost fraction used: **{cost_rt:.4f}**")
-    for phase, block in (("IS", quintile_is), ("OOS", quintile_oos)):
-        lines.append(f"\n### {phase}")
-        for feat, spreads in block.items():
-            sp = spreads.get("top_minus_bottom", 0.0)
-            lines.append(f"- **{feat}**: top-bottom {sp:.4f}")
-    lines.append("")
-    lines.append("## Simple rule backtests (top/bottom quintile)")
-    for name, frame in (("IS", rules_is), ("OOS", rules_oos)):
-        lines.append(f"\n### {name}")
-        if frame.empty:
-            lines.append("_no trades_")
+def selection_paths(symbol: str) -> tuple[Path, Path]:
+    sym = symbol.upper()
+    return (
+        REPORTS_DIR / f"phase35b_{sym}_is_selection.md",
+        REPORTS_DIR / f"phase35b_{sym}_is_selection.json",
+    )
+
+
+def assert_frozen_for_oos(symbols: list[str]) -> None:
+    missing: list[str] = []
+    for sym in symbols:
+        _, jp = selection_paths(sym)
+        if not jp.exists():
+            missing.append(str(jp))
+    if missing:
+        raise SystemExit(f"Missing frozen IS selection: {missing}. Run --phase is first.")
+    tracked = [str(selection_paths(s)[1].relative_to(REPO_ROOT)) for s in symbols]
+    porcelain = subprocess.check_output(["git", "status", "--porcelain", *tracked], text=True).strip()
+    if porcelain:
+        raise SystemExit(
+            "IS selection files are not committed. Commit with message including "
+            "'IS selection frozen' before --phase oos.\n" + porcelain
+        )
+
+
+def pick_qualified(ic_is: pd.DataFrame, is_df: pd.DataFrame, symbol: str, cfg: BacktestConfig) -> list[dict]:
+    ic_is = ic_is.sort_values("ic_tstat", key=abs, ascending=False)
+    picks: list[dict] = []
+    seen: set[str] = set()
+    for _, row in ic_is.iterrows():
+        if len(picks) >= 5:
+            break
+        feat = str(row["feature"])
+        if feat in seen:
             continue
-        m = core_metrics(frame[frame["filled"]], raw_signals=len(frame))
-        lines.append(
-            f"- trades={m.get('trades', 0)} win_rate={m.get('win_rate', 0):.2%} "
-            f"net_E={m.get('expectancy_r', m.get('expectancy_net_r', 0)):.4f} "
-            f"PF={m.get('profit_factor', 0):.2f}"
+        if abs(float(row["ic_tstat"])) < IC_TSTAT_MIN:
+            continue
+        if float(row["ic_sign_pct"]) < SIGN_MONTHS_MIN:
+            continue
+        h = int(row["horizon"])
+        thr = thresholds_from_is(is_df[feat])
+        if thr is None:
+            continue
+        tr_low = run_rule_backtest(
+            is_df, feat, h, symbol, thresholds=thr, ic_mean=float(row["mean_ic"]), cfg=cfg, low_fee=True
         )
-    if not corr.empty:
-        lines.append("\n## Spearman correlation (top features)")
-        lines.append(_df_to_md(corr.round(3)))
-    lines.append("\n## Plain-English verdicts")
-    for _, row in is_ic.drop_duplicates("feature").iterrows():
-        f = row["feature"]
-        sp = quintile_is.get(f, {}).get("top_minus_bottom", 0.0)
-        v = verdict_row(float(row["mean_ic"]), float(row["ic_tstat"]), sp, cost_rt)
-        lines.append(f"- **{f}**: {v}")
-    return "\n".join(lines)
-
-
-def run_symbol(symbol: str, *, phase: str = "all") -> None:
-    cfg = BacktestConfig()
-    df = build_feature_table(symbol, cfg=cfg)
-    df = add_forward_targets(df, cfg)
-    feats = feature_columns(df)
-    is_df = filter_sample(df, "IS")
-    oos_df = filter_sample(df, "OOS")
-    is_ic = run_ic_table(is_df, feats, len(feats) * len(HORIZONS))
-    cost_rt = 2 * (cfg.low_fee_taker + cfg.slippage)
-
-    quintile_is: dict[str, Any] = {}
-    quintile_oos: dict[str, Any] = {}
-    selection_path = REPORTS_DIR / "phase35_is_selection.md"
-
-    if phase in ("all", "is"):
-        for feat in feats:
-            for h in HORIZONS:
-                tgt = f"{TARGET_SUFFIX}_{h}"
-                quintile_is[feat] = quintile_spread(is_df[feat], is_df[tgt])
-        picks = pick_top_features(is_ic)
-        selection_path.write_text(
-            "\n".join(
-                [
-                    "# Phase 3.5 IS selection (frozen)",
-                    "",
-                    f"timestamp: {datetime.now(tz=UTC).isoformat()}",
-                    f"commit: `{_git_hash()}`",
-                    f"symbol: {symbol}",
-                    "",
-                    "## Selected rules",
-                    "",
-                ]
-                + [f"- feature `{f}` horizon {h} bars" for f, h in picks]
-                + ["", "_Do not change after viewing OOS._"]
-            ),
-            encoding="utf-8",
+        summ = rule_summary(tr_low)
+        if summ.get("trades", 0) < 10 or summ.get("net_e_pct", 0) <= 0:
+            continue
+        seen.add(feat)
+        picks.append(
+            {
+                "feature": feat,
+                "horizon": h,
+                "mean_ic": float(row["mean_ic"]),
+                "ic_tstat": float(row["ic_tstat"]),
+                "ic_sign_pct": float(row["ic_sign_pct"]),
+                "is_rule_net_e_pct_low_fee": float(summ.get("net_e_pct", 0)),
+                "is_rule_trades": int(summ.get("trades", 0)),
+                "oos_already_seen": bool(row.get("oos_already_seen")),
+            }
         )
-        (REPORTS_DIR / "phase35_is_selection.json").write_text(
-            json.dumps({"picks": picks, "git": _git_hash(), "ts": datetime.now(tz=UTC).isoformat()}, indent=2),
-            encoding="utf-8",
-        )
+    return picks
 
-    if phase == "is":
-        return "\n".join(
+
+def write_is_selection(symbol: str, picks: list[dict]) -> None:
+    md_path, json_path = selection_paths(symbol)
+    if not picks:
+        body = "\n".join(
             [
-                f"## {symbol}",
+                f"# Phase 3.5b IS selection — {symbol}",
                 "",
-                "_IS selection frozen; run with `--phase all` for OOS confirmation._",
+                f"timestamp: {datetime.now(tz=UTC).isoformat()}",
+                f"commit: `{_git_hash()}`",
+                "",
+                "## NO FEATURE QUALIFIES",
                 "",
             ]
         )
-
-    if selection_path.exists():
-        picks = json.loads((REPORTS_DIR / "phase35_is_selection.json").read_text(encoding="utf-8")).get("picks", [])
     else:
-        picks = pick_top_features(is_ic)
-
-    for feat in feats:
-        for h in HORIZONS:
-            tgt = f"{TARGET_SUFFIX}_{h}"
-            quintile_oos[feat] = quintile_spread(oos_df[feat], oos_df[tgt])
-
-    oos_ic = run_ic_table(oos_df, feats, len(feats) * len(HORIZONS))
-
-    rule_rows_is: list[pd.DataFrame] = []
-    rule_rows_oos: list[pd.DataFrame] = []
-    for feat, h in picks:
-        rule_rows_is.append(_rule_trades(is_df, feat, h, cfg, symbol))
-        rule_rows_oos.append(_rule_trades(oos_df, feat, h, cfg, symbol))
-    rules_is = pd.concat(rule_rows_is, ignore_index=True) if rule_rows_is else pd.DataFrame()
-    rules_oos = pd.concat(rule_rows_oos, ignore_index=True) if rule_rows_oos else pd.DataFrame()
-    corr = correlation_matrix(is_df, [f for f, _ in picks])
-
-    body = build_markdown(
-        symbol, is_ic, oos_ic, quintile_is, quintile_oos, rules_is, rules_oos, corr, len(feats), cost_rt
+        body = "\n".join(
+            [
+                f"# Phase 3.5b IS selection — {symbol}",
+                "",
+                f"timestamp: {datetime.now(tz=UTC).isoformat()}",
+                f"commit: `{_git_hash()}`",
+                "",
+                "| feature | horizon | IC t | sign months | IS net E% (low fee) | trades | note |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+            + [
+                f"| {p['feature']} | {p['horizon']} | {p['ic_tstat']:.2f} | {p['ic_sign_pct']:.0%} | "
+                f"{p['is_rule_net_e_pct_low_fee']:.3f} | {p['is_rule_trades']} | "
+                f"{'OOS already seen' if p['oos_already_seen'] else ''} |"
+                for p in picks
+            ]
+        )
+    md_path.write_text(body, encoding="utf-8")
+    json_path.write_text(
+        json.dumps(
+            {"symbol": symbol, "picks": picks, "git": _git_hash(), "ts": datetime.now(tz=UTC).isoformat()},
+            indent=2,
+        ),
+        encoding="utf-8",
     )
-    return body.replace(f"# Phase 3.5 — Edge research ({symbol})", f"## {symbol}", 1)
 
 
-def run_all(symbols: list[str], phase: str = "all") -> None:
-    sections: list[str] = [
-        "# Phase 3.5 — Edge research",
+def symbol_verdict(picks: list[dict], oos_rule: dict[str, dict]) -> str:
+    if not picks:
+        return "noise"
+    pos = [p for p in picks if oos_rule.get(p["feature"], {}).get("net_e_pct", -1) > 0]
+    if len(pos) >= 2:
+        return "tradeable edge after costs"
+    if len(pos) == 1:
+        return "weak"
+    return "noise"
+
+
+def run_is(symbol: str, cfg: BacktestConfig) -> dict[str, Any]:
+    df = add_forward_targets(build_feature_table(symbol, cfg=cfg), cfg)
+    feats = feature_columns(df)
+    is_df = filter_sample(df, "IS")
+    ic_is = run_ic_table(is_df, feats, len(feats) * len(HORIZONS))
+    picks = pick_qualified(ic_is, is_df, symbol, cfg)
+    write_is_selection(symbol, picks)
+    return {"symbol": symbol, "ic_is": ic_is, "picks": picks}
+
+
+def run_oos(symbol: str, cfg: BacktestConfig) -> dict[str, Any]:
+    _, jp = selection_paths(symbol)
+    payload = json.loads(jp.read_text(encoding="utf-8"))
+    picks = payload.get("picks", [])
+    df = add_forward_targets(build_feature_table(symbol, cfg=cfg), cfg)
+    is_df = filter_sample(df, "IS")
+    oos_df = filter_sample(df, "OOS")
+    feats = feature_columns(df)
+    ic_is = run_ic_table(is_df, feats, len(feats) * len(HORIZONS))
+    ic_oos = run_ic_table(oos_df, feats, len(feats) * len(HORIZONS))
+    rule_rows: dict[str, dict] = {}
+    oos_trades: list[pd.DataFrame] = []
+    for p in picks:
+        feat, h = p["feature"], int(p["horizon"])
+        row = ic_is[(ic_is.feature == feat) & (ic_is.horizon == h)].iloc[0]
+        thr = thresholds_from_is(is_df[feat])
+        if thr is None:
+            continue
+        tr_std = run_rule_backtest(
+            oos_df, feat, h, symbol, thresholds=thr, ic_mean=float(row["mean_ic"]), cfg=cfg, low_fee=False
+        )
+        tr_low = run_rule_backtest(
+            oos_df, feat, h, symbol, thresholds=thr, ic_mean=float(row["mean_ic"]), cfg=cfg, low_fee=True
+        )
+        rule_rows[feat] = {
+            "conservative": rule_summary(tr_std),
+            "low_fee": rule_summary(tr_low),
+            "net_e_pct": rule_summary(tr_low).get("net_e_pct", 0),
+        }
+        oos_trades.append(tr_low)
+    return {
+        "symbol": symbol,
+        "picks": picks,
+        "ic_is": ic_is,
+        "ic_oos": ic_oos,
+        "rule_oos": rule_rows,
+        "verdict": symbol_verdict(picks, rule_rows),
+    }
+
+
+def build_final_report(coverage_table: pd.DataFrame, is_results: list[dict], oos_results: list[dict] | None) -> str:
+    lines = [
+        "# Phase 3.5b — Edge research",
         "",
         f"_Generated {datetime.now(tz=UTC).isoformat()} | commit `{_git_hash()}`_",
         "",
+        "## Coverage summary",
+        "",
+        coverage_md(coverage_table) if not coverage_table.empty else "_no coverage_",
+        "",
     ]
-    for sym in symbols:
-        sections.append(run_symbol(sym, phase=phase))
-    path = REPORTS_DIR / "phase35_edge_research.md"
-    path.write_text("\n".join(sections), encoding="utf-8")
-    print(f"Wrote {path}")
+    for block in is_results:
+        sym = block["symbol"]
+        lines.append(f"## {sym} — IS (all features)")
+        lines.append("")
+        lines.append(_df_to_md(block["ic_is"], 60))
+        lines.append("")
+    if oos_results:
+        lines.append("## OOS confirmation")
+        lines.append("")
+        for block in oos_results:
+            sym = block["symbol"]
+            lines.append(f"### {sym}")
+            lines.append("")
+            if not block["picks"]:
+                lines.append("_NO FEATURE QUALIFIES (IS)_")
+            else:
+                for p in block["picks"]:
+                    note = " *(OOS already seen in Phase 3.5 — treat cautiously)*" if p.get("oos_already_seen") else ""
+                    lines.append(f"- `{p['feature']}` horizon {p['horizon']}{note}")
+                    ro = block["rule_oos"].get(p["feature"], {})
+                    for tag in ("conservative", "low_fee"):
+                        s = ro.get(tag, {})
+                        if s.get("trades", 0):
+                            lines.append(
+                                f"  - {tag}: trades={s['trades']} win={s['win_rate']:.1%} "
+                                f"net_E%={s.get('net_e_pct', 0):.3f} PF={s.get('profit_factor', 0):.2f}"
+                            )
+            lines.append("")
+            lines.append(f"**Verdict ({sym})**: {block['verdict']}")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def run_pipeline(symbols: list[str], phase: str) -> None:
+    cfg = BacktestConfig()
+    cov_table, cov_fails = run_coverage(symbols)
+    (REPORTS_DIR / "phase35b_coverage.md").write_text(coverage_md(cov_table), encoding="utf-8")
+    deriv_fail = [f for f in cov_fails if any(d in f for d in ("funding", "open_interest", "basis", "ls_ratio", "oi_"))]
+    if deriv_fail:
+        print("WARN derivative coverage failures:", deriv_fail[:10])
+
+    is_results: list[dict] = []
+    oos_results: list[dict] | None = None
+
+    if phase in ("is", "all"):
+        for sym in symbols:
+            is_results.append(run_is(sym, cfg))
+        print("Wrote per-symbol IS selection under reports/phase35b_*_is_selection.*")
+        if phase == "is":
+            sections = build_final_report(cov_table, is_results, None)
+            (REPORTS_DIR / "phase35b_edge_research.md").write_text(sections, encoding="utf-8")
+            return
+
+    if phase in ("oos", "all"):
+        if phase == "oos":
+            assert_frozen_for_oos(symbols)
+        oos_results = []
+        for sym in symbols:
+            oos_results.append(run_oos(sym, cfg))
+        oos_md = ["# Phase 3.5b OOS confirmation", "", f"_commit `{_git_hash()}`_", ""]
+        for block in oos_results:
+            oos_md.append(f"## {block['symbol']}: **{block['verdict']}**")
+            oos_md.append(_df_to_md(block["ic_oos"], 30))
+            oos_md.append("")
+        (REPORTS_DIR / "phase35b_oos.md").write_text("\n".join(oos_md), encoding="utf-8")
+        report = build_final_report(cov_table, is_results, oos_results)
+        (REPORTS_DIR / "phase35b_edge_research.md").write_text(report, encoding="utf-8")
+        print(f"Wrote {REPORTS_DIR / 'phase35b_edge_research.md'}")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Phase 3.5 edge research report")
+    p = argparse.ArgumentParser(description="Phase 3.5b edge research")
     p.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT")
-    p.add_argument("--phase", default="all", choices=("all", "is", "oos"))
+    p.add_argument("--phase", default="all", choices=("is", "oos", "all"))
     args = p.parse_args()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    run_all(symbols, phase=args.phase)
+    run_pipeline(symbols, args.phase)
 
 
 if __name__ == "__main__":

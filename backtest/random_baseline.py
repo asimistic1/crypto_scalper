@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import random
 from concurrent.futures import ProcessPoolExecutor
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -19,6 +22,11 @@ from core.models import Direction, EntryType
 logger = logging.getLogger(__name__)
 
 
+def _deterministic_seed(*parts: Any) -> int:
+    payload = hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()
+    return int(payload[:12], 16)
+
+
 def _atr_multiples(row: pd.Series, atr: float) -> tuple[float, float, float, float]:
     entry = float(row["entry"])
     if atr <= 0 or np.isnan(atr):
@@ -30,19 +38,20 @@ def _atr_multiples(row: pd.Series, atr: float) -> tuple[float, float, float, flo
     return sl, tp1, tp2, tp3
 
 
-def _build_random_signal(
+def _build_random_signal_market(
     frame: OhlcFrame,
     bar: int,
     direction: str,
-    entry_type: str,
     sl_m: float,
     tp1_m: float,
     tp2_m: float,
     tp3_m: float,
     atr_val: float,
     rng: random.Random,
-) -> SimSignal:
-    entry = float(frame.close[bar])
+) -> SimSignal | None:
+    if bar + 1 >= len(frame.close):
+        return None
+    entry = float(frame.open[bar + 1])
     atr_val = atr_val if atr_val > 0 else max(entry * 0.001, 1.0)
     if direction == Direction.LONG.value:
         sl = entry - sl_m * atr_val
@@ -56,7 +65,7 @@ def _build_random_signal(
         tp3 = entry - tp3_m * atr_val
     return SimSignal(
         direction=Direction(direction),
-        entry_type=EntryType(entry_type),
+        entry_type=EntryType.MARKET,
         entry=entry,
         stop_loss=sl,
         tp1=tp1,
@@ -113,37 +122,35 @@ def _mc_expectancy_for_frame(
     eligible: list[int],
     mults: list[tuple[float, float, float, float]],
     directions: list[str],
-    entry_types: list[str],
     n_trades: int,
-) -> float:
+) -> float | None:
     atr = atr14(frame)
     rng = random.Random(run_seed)
     dir_pool = directions[:]
-    et_pool = entry_types[:]
     rng.shuffle(dir_pool)
-    rng.shuffle(et_pool)
     pick_bars = [eligible[rng.randrange(len(eligible))] for _ in range(n_trades)]
     pick_bars.sort()
     specs: list[tuple[int, SimSignal]] = []
     for j, bar in enumerate(pick_bars):
         sl_m, tp1_m, tp2_m, tp3_m = mults[rng.randrange(len(mults))]
         d = dir_pool[j % len(dir_pool)]
-        et = et_pool[j % len(et_pool)]
         atr_v = (
             float(atr[bar])
             if bar < len(atr) and not np.isnan(atr[bar])
             else float(frame.close[bar]) * 0.01
         )
-        sig = _build_random_signal(frame, bar, d, et, sl_m, tp1_m, tp2_m, tp3_m, atr_v, rng)
+        sig = _build_random_signal_market(frame, bar, d, sl_m, tp1_m, tp2_m, tp3_m, atr_v, rng)
+        if sig is None:
+            continue
         specs.append((int(frame.close_time[bar]), sig))
     mc_rows = _simulate_mc_portfolio(frame, specs, cfg, exit_model)
     if not mc_rows:
-        return -999.0
+        return None
     return float(np.mean([float(r["r_net"]) for r in mc_rows]))
 
 
-def _one_mc_expectancy(task: tuple) -> float:
-    symbol, tf, exit_model, cfg_dict, run_seed, eligible, mults, directions, entry_types, n_trades = task
+def _one_mc_expectancy(task: tuple) -> float | None:
+    symbol, tf, exit_model, cfg_dict, run_seed, eligible, mults, directions, n_trades = task
     frame = get_ohlc(symbol, tf)
     return _mc_expectancy_for_frame(
         frame,
@@ -153,12 +160,40 @@ def _one_mc_expectancy(task: tuple) -> float:
         eligible,
         mults,
         directions,
-        entry_types,
         n_trades,
     )
 
 
-def random_baseline_percentile(
+def _summarize_exps(exps: list[float | None], strat_exp: float) -> dict[str, Any]:
+    valid = [e for e in exps if e is not None]
+    if not valid:
+        return {
+            "percentile": 50.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "p5": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "mc_valid_runs": 0,
+            "mc_total_runs": len(exps),
+        }
+    arr = np.array(valid, dtype=np.float64)
+    below = int((arr < strat_exp).sum())
+    pct = below / len(valid) * 100.0
+    return {
+        "percentile": pct,
+        "mean": float(arr.mean()),
+        "std": float(arr.std(ddof=0)),
+        "p5": float(np.percentile(arr, 5)),
+        "p50": float(np.percentile(arr, 50)),
+        "p95": float(np.percentile(arr, 95)),
+        "mc_valid_runs": len(valid),
+        "mc_total_runs": len(exps),
+        "strategy_expectancy": strat_exp,
+    }
+
+
+def random_baseline_stats(
     frame: OhlcFrame,
     signals: pd.DataFrame,
     trades: pd.DataFrame,
@@ -167,14 +202,14 @@ def random_baseline_percentile(
     *,
     sample: str = "ALL",
     n_mc: int = 200,
-) -> float:
+) -> dict[str, Any]:
     if "sample" in trades.columns and sample != "ALL":
         trades = trades[trades["sample"] == sample]
         sig_ids = set(trades["setup_id"].astype(str))
         signals = signals[signals["setup_id"].astype(str).isin(sig_ids)]
     filled = trades[trades["filled"]]
     if filled.empty:
-        return 50.0
+        return _summarize_exps([], 0.0)
     strat_exp = float(filled["r_net"].astype(float).mean())
     merged = filled.merge(
         signals[
@@ -183,7 +218,6 @@ def random_baseline_percentile(
                 "bar_index",
                 "close_time",
                 "direction",
-                "entry_type",
                 "entry",
                 "stop_loss",
                 "tp1",
@@ -198,15 +232,13 @@ def random_baseline_percentile(
     atr = atr14(frame)
     mults: list[tuple[float, float, float, float]] = []
     directions: list[str] = []
-    entry_types: list[str] = []
     for _, row in merged.iterrows():
         bi = int(row["bar_index"])
         directions.append(str(row["direction"]))
-        entry_types.append(str(row["entry_type"]))
         mults.append(_atr_multiples(row, float(atr[bi]) if bi < len(atr) else 1.0))
     n_trades = len(directions)
     if n_trades == 0:
-        return 50.0
+        return _summarize_exps([], strat_exp)
     t_min = int(merged["close_time"].min())
     t_max = int(merged["close_time"].max())
     eligible = [
@@ -215,8 +247,8 @@ def random_baseline_percentile(
         if t_min <= int(frame.close_time[i]) <= t_max
     ]
     if not eligible:
-        return 50.0
-    base_seed = cfg.random_seed + hash((frame.symbol, frame.timeframe, exit_model, sample)) % (2**31)
+        return _summarize_exps([], strat_exp)
+    base_seed = _deterministic_seed(cfg.random_seed, frame.symbol, frame.timeframe, exit_model, sample)
     cfg_dict = cfg.to_json()
     tasks = [
         (
@@ -228,27 +260,25 @@ def random_baseline_percentile(
             eligible,
             mults,
             directions,
-            entry_types,
             n_trades,
         )
         for i in range(n_mc)
     ]
-    exps: list[float] = []
+    exps: list[float | None]
     if n_mc <= 16:
-        for i in range(n_mc):
-            exps.append(
-                _mc_expectancy_for_frame(
-                    frame,
-                    exit_model,
-                    cfg,
-                    base_seed + i,
-                    eligible,
-                    mults,
-                    directions,
-                    entry_types,
-                    n_trades,
-                )
+        exps = [
+            _mc_expectancy_for_frame(
+                frame,
+                exit_model,
+                cfg,
+                base_seed + i,
+                eligible,
+                mults,
+                directions,
+                n_trades,
             )
+            for i in range(n_mc)
+        ]
     else:
         workers = max(1, (os.cpu_count() or 2) - 1)
         logger.info(
@@ -263,5 +293,8 @@ def random_baseline_percentile(
         )
         with ProcessPoolExecutor(max_workers=workers) as pool:
             exps = list(pool.map(_one_mc_expectancy, tasks, chunksize=2))
-    below = sum(1 for exp in exps if exp < strat_exp)
-    return below / n_mc * 100.0
+    return _summarize_exps(exps, strat_exp)
+
+
+def random_baseline_percentile(*args, **kwargs) -> float:
+    return float(random_baseline_stats(*args, **kwargs)["percentile"])

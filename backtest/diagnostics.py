@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.config import BacktestConfig
-from backtest.costs import recompute_net_r_row
+from backtest.costs import net_r_from_gross, recompute_net_r_row
 from backtest.history import ensure_indicators, load_history
 from backtest.history_cache import atr14, get_ohlc
 from backtest.metrics import core_metrics
@@ -134,15 +134,15 @@ def _walk_path_r(
     tp_r: float | None = None,
     sl_mult: float = 1.0,
     max_hold: int | None = None,
-) -> tuple[float, float, bool, int | None]:
-    """Return (gross_r, reached_tp before sl, sl_hit, bars_held)."""
+) -> tuple[float, float, bool, int | None, float, float]:
+    """Return (gross_r, mfe_peak, tp_hit, bars_held, fill_price, exit_price)."""
     fill = resolve_fill_index(df, signal, cfg)
     if fill is None:
-        return 0.0, 0.0, False, None
+        return 0.0, 0.0, False, None, 0.0, 0.0
     fill_idx, fill_price = fill
     risk = abs(signal.entry - signal.stop_loss)
     if risk <= 0:
-        return 0.0, 0.0, False, fill_idx
+        return 0.0, 0.0, False, fill_idx, fill_price, fill_price
     sl = signal.stop_loss
     if sl_mult != 1.0:
         dist = abs(signal.entry - sl) * sl_mult
@@ -167,31 +167,37 @@ def _walk_path_r(
             mfe = max(mfe, (h - fill_price) / risk)
             mae = min(mae, (l - fill_price) / risk)
             if float(bar["open"]) < sl:
-                return (float(bar["open"]) - fill_price) / risk, mfe, False, k - fill_idx
+                ex = _apply_slippage(float(bar["open"]), signal.direction, "exit", cfg.slippage)
+                return (ex - fill_price) / risk, mfe, False, k - fill_idx, fill_price, ex
             same = _same_bar_sl_first_long(bar, sl, tp)
             if same == Outcome.SL.value:
-                return (sl - fill_price) / risk, mfe, False, k - fill_idx
+                ex = _apply_slippage(sl, signal.direction, "exit", cfg.slippage)
+                return (ex - fill_price) / risk, mfe, False, k - fill_idx, fill_price, ex
             if same == Outcome.TP1.value:
                 reached_tp = max(reached_tp, (tp - fill_price) / risk)
-                return (tp - fill_price) / risk, mfe, True, k - fill_idx
+                ex = _apply_slippage(tp, signal.direction, "exit", cfg.slippage)
+                return (ex - fill_price) / risk, mfe, True, k - fill_idx, fill_price, ex
         else:
             mfe = max(mfe, (fill_price - l) / risk)
             mae = min(mae, (fill_price - h) / risk)
             if float(bar["open"]) > sl:
-                return (fill_price - float(bar["open"])) / risk, mfe, False, k - fill_idx
+                ex = _apply_slippage(float(bar["open"]), signal.direction, "exit", cfg.slippage)
+                return (fill_price - ex) / risk, mfe, False, k - fill_idx, fill_price, ex
             same = _same_bar_sl_first_short(bar, sl, tp)
             if same == Outcome.SL.value:
-                return (fill_price - sl) / risk, mfe, False, k - fill_idx
+                ex = _apply_slippage(sl, signal.direction, "exit", cfg.slippage)
+                return (fill_price - ex) / risk, mfe, False, k - fill_idx, fill_price, ex
             if same == Outcome.TP1.value:
                 reached_tp = max(reached_tp, (fill_price - tp) / risk)
-                return (fill_price - tp) / risk, mfe, True, k - fill_idx
+                ex = _apply_slippage(tp, signal.direction, "exit", cfg.slippage)
+                return (fill_price - ex) / risk, mfe, True, k - fill_idx, fill_price, ex
     last = df.iloc[min(len(df) - 1, fill_idx + hold)]
     exit_p = _apply_slippage(float(last["close"]), signal.direction, "exit", cfg.slippage)
     if signal.direction == Direction.LONG:
         gross = (exit_p - fill_price) / risk
     else:
         gross = (fill_price - exit_p) / risk
-    return gross, mfe, False, min(len(df) - 1, fill_idx + hold) - fill_idx
+    return gross, mfe, False, min(len(df) - 1, fill_idx + hold) - fill_idx, fill_price, exit_p
 
 
 def _breakdown_table(filled: pd.DataFrame, group_col: str) -> pd.DataFrame:
@@ -284,7 +290,7 @@ def _mfe_mae_block(filled: pd.DataFrame, frame, cfg: BacktestConfig) -> dict[str
             tp3=_sig_val(row, "tp3_sig", "tp3", "tp2_sig", "tp2"),
             signal_bar=int(row.get("bar_index", 0)),
         )
-        _, mfe, _, _ = _walk_path_r(df, sim, cfg, frame.timeframe)
+        _, mfe, _, _, _, _ = _walk_path_r(df, sim, cfg, frame.timeframe)
         n += 1
         if mfe >= 0.5:
             reach_05 += 1
@@ -313,7 +319,7 @@ def _whatif_grid(filled: pd.DataFrame, frame, cfg: BacktestConfig, sample: str) 
     for tp_r in (1.0, 1.5, 2.0):
         for sl_m in (1.0, 1.5, 2.0):
             for hold in (8, 16, 32):
-                gross_list: list[float] = []
+                path_rows: list[tuple[float, float, float, float]] = []
                 for _, row in filled.iterrows():
                     sim = SimSignal(
                         direction=Direction(str(_field(row, "direction"))),
@@ -325,21 +331,33 @@ def _whatif_grid(filled: pd.DataFrame, frame, cfg: BacktestConfig, sample: str) 
                         tp3=_sig_val(row, "tp3_sig", "tp3"),
                         signal_bar=int(row["bar_index"]),
                     )
-                    g, _, _, _ = _walk_path_r(
+                    base_risk = abs(sim.entry - sim.stop_loss)
+                    scenario_risk = base_risk * sl_m if base_risk > 0 else 0.0
+                    g, _, _, _, fill_px, exit_px = _walk_path_r(
                         df, sim, cfg, frame.timeframe, tp_r=tp_r, sl_mult=sl_m, max_hold=hold
                     )
-                    gross_list.append(g)
-                if not gross_list:
+                    path_rows.append((g, scenario_risk, fill_px, exit_px))
+                if not path_rows:
                     continue
+                gross_list = [t[0] for t in path_rows]
                 gr = pd.Series(gross_list)
                 net_vals: list[float] = []
                 for j, (_, row) in enumerate(filled.iterrows()):
-                    r = _row_for_cost(row)
-                    r["r_gross"] = gross_list[j]
-                    r["entry_price"] = float(row.get("entry_price", r["entry_level"]))
-                    r["exit_price"] = float(row.get("exit_price", r["entry_level"]))
-                    r["filled"] = True
-                    net_vals.append(recompute_net_r_row(r, cfg, 1.0))
+                    g, scenario_risk, fill_px, exit_px = path_rows[j]
+                    sim_entry = _sig_val(row, "entry_sig", "entry_level", "entry")
+                    entry_px = fill_px or float(row.get("entry_price", sim_entry))
+                    exit_px = exit_px or entry_px
+                    net_vals.append(
+                        net_r_from_gross(
+                            g,
+                            entry_px,
+                            exit_px,
+                            scenario_risk,
+                            str(_field(row, "direction")),
+                            str(_field(row, "entry_type")),
+                            cfg,
+                        )
+                    )
                 rows.append(
                     {
                         "sample": sample,

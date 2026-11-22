@@ -14,6 +14,25 @@ def _fee_rates(cfg: BacktestConfig, mult: float, *, is_maker: bool) -> float:
     return (fee + cfg.slippage) * mult
 
 
+def net_r_from_gross(
+    gross_r: float,
+    entry_price: float,
+    exit_price: float,
+    risk: float,
+    direction: str,
+    entry_type: str,
+    cfg: BacktestConfig,
+    mult: float = 1.0,
+) -> float:
+    """Convert scenario gross R to net R using dollar fees / *risk* (R units)."""
+    if risk <= 0 or not entry_price:
+        return gross_r
+    maker_entry = entry_type.upper() not in ("MARKET",) and cfg.fee_model != "conservative"
+    fee_entry = entry_price * _fee_rates(cfg, mult, is_maker=maker_entry)
+    fee_exit = exit_price * _fee_rates(cfg, mult, is_maker=False)
+    return gross_r - (fee_entry + fee_exit) / risk
+
+
 def recompute_net_r_row(
     row: pd.Series,
     cfg: BacktestConfig,

@@ -17,6 +17,21 @@ python -m backtest.run --symbols BTCUSDT --tfs 5m,15m,1h --exit-models tp1_full,
 
 Copies land here automatically via `backtest.reports_export.export_reports`.
 
+**Phase 3.5 edge research**
+
+```bash
+python -m backtest.data_download --research --symbols BTCUSDT,ETHUSDT,SOLUSDT --months 24
+python -m research.edge_report --symbols BTCUSDT,ETHUSDT,SOLUSDT --phase all
+```
+
+| File | Contents |
+| --- | --- |
+| `phase35_is_selection.md` | Frozen IS feature/rule picks (timestamp + commit). |
+| `phase35_is_selection.json` | Machine-readable IS selection. |
+| `phase35_edge_research.md` | IS IC/quintiles/rules + OOS confirmation and verdicts. |
+
+Gap notes live in `data/history/{SYMBOL}/download_gaps.json` (gitignored).
+
 **BTC regime (`btc_regime`)** needs ≥200 daily bars of warmup before your LTF backtest window. Fetch ~30 months of `1d` history once per machine (data are gitignored):
 
 ```bash

@@ -1,0 +1,26 @@
+{
+  "picks": [
+    [
+      "taker_buy_ratio",
+      1
+    ],
+    [
+      "taker_buy_ratio_z24",
+      1
+    ],
+    [
+      "taker_buy_ratio_15m_z24",
+      1
+    ],
+    [
+      "taker_buy_ratio_z72",
+      1
+    ],
+    [
+      "taker_delta_12h",
+      1
+    ]
+  ],
+  "git": "523bfdb0c63750fd849ceed9a3ed2a943e2b424f",
+  "ts": "2026-11-22T17:41:59.917647+00:00"
+}

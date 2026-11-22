@@ -1,0 +1,1 @@
+"""Phase 3.5 — edge research (features, targets, predictive tests). No live engine changes."""

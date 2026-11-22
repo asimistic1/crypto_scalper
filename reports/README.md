@@ -32,6 +32,22 @@ python -m research.edge_report --symbols BTCUSDT,ETHUSDT,SOLUSDT --phase all
 
 Gap notes live in `data/history/{SYMBOL}/download_gaps.json` (gitignored).
 
+**Phase 3.5b (clean IS→OOS)**
+
+```bash
+python -m research.coverage --symbols BTCUSDT,ETHUSDT,SOLUSDT --strict
+python -m research.edge_report --symbols BTCUSDT,ETHUSDT,SOLUSDT --phase is
+# commit reports/phase35b_*_is_selection.*  ("IS selection frozen")
+python -m research.edge_report --symbols BTCUSDT,ETHUSDT,SOLUSDT --phase oos
+```
+
+| File | Contents |
+| --- | --- |
+| `phase35b_coverage.md` | Non-null / uniqueness gate per feature |
+| `phase35b_{SYMBOL}_is_selection.md/json` | Frozen top rules (commit before OOS) |
+| `phase35b_oos.md` | OOS metrics on frozen picks only |
+| `phase35b_edge_research.md` | Full 3.5b summary + verdicts |
+
 **BTC regime (`btc_regime`)** needs ≥200 daily bars of warmup before your LTF backtest window. Fetch ~30 months of `1d` history once per machine (data are gitignored):
 
 ```bash

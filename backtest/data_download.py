@@ -16,7 +16,14 @@ from pathlib import Path
 import pandas as pd
 
 from backtest.csv_klines import parse_kline_csv
-from backtest.paths import FUNDING_DIR, HISTORY_DIR, funding_parquet, history_parquet
+from backtest.paths import (
+    FUNDING_DIR,
+    HISTORY_DIR,
+    download_gaps_path,
+    funding_parquet,
+    history_parquet,
+    symbol_aux_parquet,
+)
 from backtest.secure_io import (
     http_get_bytes,
     safe_extract_csv,
@@ -29,6 +36,7 @@ from core.http_client import fapi_get
 logger = logging.getLogger(__name__)
 
 VISION_BASE = "https://data.binance.vision/data/futures/um"
+SPOT_VISION_BASE = "https://data.binance.vision/data/spot"
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT")
 DEFAULT_INTERVALS = ("5m", "15m", "1h", "4h", "1d")
 OPTIONAL_INTERVALS = ("1m",)
@@ -80,6 +88,10 @@ def _monthly_funding_url(symbol: str, spec: MonthSpec) -> tuple[str, str]:
 
 def _manifest_path(symbol: str, interval: str) -> Path:
     return HISTORY_DIR / symbol.upper() / f"{interval}.manifest.json"
+
+
+def _aux_manifest_path(symbol: str, kind: str) -> Path:
+    return HISTORY_DIR / symbol.upper() / f"{kind}.manifest.json"
 
 
 def _load_manifest(symbol: str, interval: str) -> dict:
@@ -250,6 +262,204 @@ def _parse_funding_csv(raw: bytes) -> pd.DataFrame:
     return df.dropna(subset=["calc_time"]).sort_values("calc_time")
 
 
+def _daily_metrics_url(symbol: str, day: datetime) -> tuple[str, str]:
+    d = day.strftime("%Y-%m-%d")
+    fname = f"{symbol}-metrics-{d}.zip"
+    base = f"{VISION_BASE}/daily/metrics/{symbol}"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
+
+
+def _parse_metrics_csv(raw: bytes) -> pd.DataFrame:
+    import io as _io
+
+    text = raw.decode("utf-8")
+    df = pd.read_csv(_io.StringIO(text))
+    if "create_time" in df.columns:
+        df["time"] = pd.to_datetime(df["create_time"], utc=True)
+        df["close_time"] = (df["time"].astype("int64") // 10**6) + 300_000 - 1
+    df = df.rename(
+        columns={
+            "sum_open_interest": "open_interest",
+            "sum_open_interest_value": "open_interest_value",
+            "sum_toptrader_long_short_ratio": "top_trader_ls_ratio",
+            "count_toptrader_long_short_ratio": "top_trader_ls_ratio_count",
+            "count_long_short_ratio": "global_ls_ratio",
+            "sum_taker_long_short_vol_ratio": "taker_ls_vol_ratio",
+        }
+    )
+    for c in ("open_interest", "open_interest_value", "top_trader_ls_ratio", "global_ls_ratio", "taker_ls_vol_ratio"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    keep = [c for c in df.columns if c not in ("create_time",)]
+    return df[keep].dropna(subset=["time"]).sort_values("time")
+
+
+def fetch_daily_metrics(symbol: str, day: datetime, manifest: dict) -> pd.DataFrame | None:
+    key = f"metrics:{day.strftime('%Y-%m-%d')}"
+    if manifest.get("verified_shards", {}).get(key):
+        return None
+    url, csum = _daily_metrics_url(symbol, day)
+    expected = f"{symbol}-metrics-{day.strftime('%Y-%m-%d')}.csv"
+    try:
+        csv = download_verified_zip(url, csum, expected)
+        manifest.setdefault("verified_shards", {})[key] = sha256_bytes(csv)
+        return _parse_metrics_csv(csv)
+    except Exception as exc:  # noqa: BLE001
+        manifest.setdefault("gaps", []).append({"kind": "metrics", "day": day.strftime("%Y-%m-%d"), "error": str(exc)})
+        logger.debug("metrics %s %s: %s", symbol, day.date(), exc)
+        return None
+
+
+def download_metrics(symbol: str, months: int) -> Path | None:
+    """5m futures metrics (OI, L/S ratios, taker ratio) from daily Vision archives."""
+    manifest_path = _aux_manifest_path(symbol, "metrics_5m")
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"verified_shards": {}, "gaps": []}
+    end = datetime.now(tz=UTC)
+    start = end - timedelta(days=months * 31)
+    frames: list[pd.DataFrame] = []
+    day = start
+    while day.date() <= end.date():
+        part = fetch_daily_metrics(symbol, day, manifest)
+        if part is not None and not part.empty:
+            frames.append(part)
+        day += timedelta(days=1)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = symbol_aux_parquet(symbol, "metrics_5m")
+    if not frames:
+        return path if path.exists() else None
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["close_time"], keep="last")
+    df = df.sort_values("time").reset_index(drop=True)
+    warnings = integrity_report(df, "5m")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
+    gaps_path = download_gaps_path(symbol)
+    gaps = {"metrics": manifest.get("gaps", []), "updated": datetime.now(tz=UTC).isoformat()}
+    gaps_path.write_text(json.dumps(gaps, indent=2), encoding="utf-8")
+    for w in warnings:
+        logger.warning("%s metrics: %s", symbol, w)
+    logger.info("saved %s metrics rows -> %s", len(df), path)
+    return path
+
+
+def _premium_kline_url(symbol: str, interval: str, spec: MonthSpec) -> tuple[str, str]:
+    fname = f"{symbol}-{interval}-{spec.label()}.zip"
+    base = f"{VISION_BASE}/monthly/premiumIndexKlines/{symbol}/{interval}"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
+
+
+def fetch_month_premium(symbol: str, interval: str, spec: MonthSpec, manifest: dict) -> pd.DataFrame | None:
+    key = f"premium:{spec.label()}"
+    if manifest.get("verified_shards", {}).get(key):
+        return None
+    url, csum = _premium_kline_url(symbol, interval, spec)
+    expected = f"{symbol}-{interval}-{spec.label()}.csv"
+    try:
+        csv = download_verified_zip(url, csum, expected)
+        manifest.setdefault("verified_shards", {})[key] = sha256_bytes(csv)
+        return parse_kline_csv(csv)
+    except Exception as exc:  # noqa: BLE001
+        manifest.setdefault("gaps", []).append({"kind": "premium", "month": spec.label(), "error": str(exc)})
+        logger.warning("premium %s %s: %s", symbol, spec.label(), exc)
+        return None
+
+
+def download_premium_index(symbol: str, interval: str, months: int) -> Path | None:
+    manifest_path = _aux_manifest_path(symbol, f"premium_{interval}")
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"verified_shards": {}, "gaps": []}
+    end = datetime.now(tz=UTC)
+    specs = month_range(end, months)
+    frames: list[pd.DataFrame] = []
+    for spec in specs:
+        part = fetch_month_premium(symbol, interval, spec, manifest)
+        if part is not None and not part.empty:
+            frames.append(part)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = symbol_aux_parquet(symbol, f"premium_{interval}")
+    if not frames:
+        return path if path.exists() else None
+    df = merge_frames(frames)
+    warnings = integrity_report(df, interval)
+    df.to_parquet(path, index=False)
+    for w in warnings:
+        logger.warning("%s premium %s: %s", symbol, interval, w)
+    logger.info("saved %s premium rows -> %s", len(df), path)
+    return path
+
+
+def _spot_kline_url(symbol: str, interval: str, spec: MonthSpec) -> tuple[str, str]:
+    fname = f"{symbol}-{interval}-{spec.label()}.zip"
+    base = f"{SPOT_VISION_BASE}/monthly/klines/{symbol}/{interval}"
+    return f"{base}/{fname}", f"{base}/{fname}.CHECKSUM"
+
+
+def fetch_month_spot(symbol: str, interval: str, spec: MonthSpec, manifest: dict) -> pd.DataFrame | None:
+    key = f"spot:{spec.label()}"
+    if manifest.get("verified_shards", {}).get(key):
+        return None
+    url, csum = _spot_kline_url(symbol, interval, spec)
+    expected = f"{symbol}-{interval}-{spec.label()}.csv"
+    try:
+        csv = download_verified_zip(url, csum, expected)
+        manifest.setdefault("verified_shards", {})[key] = sha256_bytes(csv)
+        return parse_kline_csv(csv)
+    except Exception as exc:  # noqa: BLE001
+        manifest.setdefault("gaps", []).append({"kind": "spot", "month": spec.label(), "error": str(exc)})
+        logger.warning("spot %s %s: %s", symbol, spec.label(), exc)
+        return None
+
+
+def download_spot_klines(symbol: str, interval: str, months: int) -> Path | None:
+    manifest_path = _aux_manifest_path(symbol, f"spot_{interval}")
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"verified_shards": {}, "gaps": []}
+    end = datetime.now(tz=UTC)
+    specs = month_range(end, months)
+    frames: list[pd.DataFrame] = []
+    for spec in specs:
+        part = fetch_month_spot(symbol, interval, spec, manifest)
+        if part is not None and not part.empty:
+            frames.append(part)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = symbol_aux_parquet(symbol, f"spot_{interval}")
+    if not frames:
+        return path if path.exists() else None
+    df = merge_frames(frames)
+    warnings = integrity_report(df, interval)
+    df.to_parquet(path, index=False)
+    for w in warnings:
+        logger.warning("%s spot %s: %s", symbol, interval, w)
+    logger.info("saved %s spot rows -> %s", len(df), path)
+    return path
+
+
+def download_funding_to_symbol(symbol: str, months: int) -> Path | None:
+    """Funding rate parquet under data/history/{SYMBOL}/funding.parquet."""
+    legacy = download_funding(symbol, months)
+    if legacy is None or not legacy.exists():
+        return None
+    df = pd.read_parquet(legacy)
+    path = symbol_aux_parquet(symbol, "funding")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
+    return path
+
+
+def run_research_download(symbols: list[str], months: int = 24) -> None:
+    """Funding + metrics + premium 1h + spot 1h for edge research."""
+    for sym in symbols:
+        sym = sym.upper()
+        logger.info("research bundle %s (%s months)…", sym, months)
+        download_funding_to_symbol(sym, months)
+        download_metrics(sym, months)
+        download_premium_index(sym, "1h", months)
+        download_spot_klines(sym, "1h", months)
+        gaps_path = download_gaps_path(sym)
+        if gaps_path.exists():
+            logger.info("gaps logged -> %s", gaps_path)
+
+
 def download_funding(symbol: str, months: int) -> Path | None:
     manifest_path = FUNDING_DIR / f"{symbol}.manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"verified_shards": {}}
@@ -309,8 +519,16 @@ def main() -> None:
     p.add_argument("--intervals", default=",".join(DEFAULT_INTERVALS))
     p.add_argument("--months", type=int, default=24)
     p.add_argument("--no-funding", action="store_true")
+    p.add_argument(
+        "--research",
+        action="store_true",
+        help="Download edge-research bundle (funding, metrics, premium 1h, spot 1h)",
+    )
     args = p.parse_args()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    if args.research:
+        run_research_download(symbols, months=args.months)
+        return
     intervals = [s.strip() for s in args.intervals.split(",") if s.strip()]
     run_download(symbols, intervals, months=args.months, include_funding=not args.no_funding)
 

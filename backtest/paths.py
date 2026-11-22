@@ -18,3 +18,12 @@ def history_parquet(symbol: str, interval: str) -> Path:
 
 def funding_parquet(symbol: str) -> Path:
     return FUNDING_DIR / f"{symbol.upper()}.parquet"
+
+
+def symbol_aux_parquet(symbol: str, stem: str) -> Path:
+    """Research/auxiliary series under data/history/{SYMBOL}/{stem}.parquet."""
+    return HISTORY_DIR / symbol.upper() / f"{stem}.parquet"
+
+
+def download_gaps_path(symbol: str) -> Path:
+    return HISTORY_DIR / symbol.upper() / "download_gaps.json"

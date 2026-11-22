@@ -1,0 +1,757 @@
+
+=== Metrics by symbol / tf / exit model (IS | OOS) ===
+slice | sample | signals | taken | fill% | WR(TP1<SL) | avgW | avgL | E[R] | PF | totR | maxDD | MC95DD | random baseline | rho | cost1.5E | cost2.0E
+BTCUSDT|15m|partial_be | IS | 2822 | 940 | 90.4% | 34.0%[30.9%-37.3%] | 0.87 | -1.34 | -0.519[-59.7%--44.6%] | 0.38 | -441.2 | -442.52 | -439.78 | 100% μ=-0.799 σ=0.043 p5/50/95=-0.870/-0.798/-0.730 | -0.01028808588621698 | -0.504 | -0.657
+BTCUSDT|15m|partial_be | OOS | 2822 | 584 | 90.4% | 31.4%[27.6%-35.5%] | 0.89 | -1.33 | -0.548[-64.4%--45.9%] | 0.36 | -289.1 | -292.60 | -287.71 | 100% μ=-0.803 σ=0.058 p5/50/95=-0.892/-0.805/-0.710 | 0.032484943486511014 | -0.543 | -0.694
+BTCUSDT|15m|tp1_full | IS | 2822 | 979 | 90.7% | 33.7%[30.6%-36.8%] | 1.41 | -1.34 | -0.326[-40.9%--23.2%] | 0.62 | -289.4 | -293.34 | -288.11 | 100% μ=-0.568 σ=0.050 p5/50/95=-0.652/-0.566/-0.491 | 0.015553779976899579 | -0.478 | -0.631
+BTCUSDT|15m|tp1_full | OOS | 2822 | 623 | 90.4% | 31.8%[28.1%-35.8%] | 1.40 | -1.33 | -0.364[-46.8%--26.2%] | 0.58 | -204.8 | -208.28 | -203.47 | 100% μ=-0.559 σ=0.061 p5/50/95=-0.660/-0.558/-0.447 | 0.04916689989336351 | -0.514 | -0.665
+BTCUSDT|1h|partial_be | IS | 752 | 301 | 84.1% | 36.8%[31.1%-42.9%] | 0.93 | -1.27 | -0.409[-54.5%--27.0%] | 0.47 | -103.4 | -102.98 | -102.07 | 98% μ=-0.570 σ=0.076 p5/50/95=-0.694/-0.578/-0.441 | -0.03482766235248262 | -0.400 | -0.517
+BTCUSDT|1h|partial_be | OOS | 752 | 172 | 86.0% | 36.5%[29.2%-44.5%] | 0.90 | -1.33 | -0.472[-63.7%--28.9%] | 0.42 | -69.9 | -74.60 | -68.48 | 85% μ=-0.564 σ=0.095 p5/50/95=-0.719/-0.556/-0.402 | -0.07760506705856658 | -0.459 | -0.585
+BTCUSDT|1h|tp1_full | IS | 752 | 315 | 83.8% | 37.1%[31.5%-43.1%] | 1.43 | -1.27 | -0.194[-36.9%--4.0%] | 0.75 | -51.2 | -52.31 | -51.26 | 98% μ=-0.369 σ=0.091 p5/50/95=-0.524/-0.376/-0.226 | -0.0492170430903482 | -0.310 | -0.427
+BTCUSDT|1h|tp1_full | OOS | 752 | 178 | 86.5% | 37.0%[29.8%-44.9%] | 1.43 | -1.33 | -0.257[-48.3%--5.1%] | 0.68 | -39.6 | -48.27 | -38.83 | 84% μ=-0.375 σ=0.110 p5/50/95=-0.535/-0.377/-0.192 | -0.07640240847071966 | -0.384 | -0.510
+BTCUSDT|5m|partial_be | IS | 3726 | 1086 | 92.8% | 29.9%[27.1%-32.8%] | 0.88 | -1.32 | -0.578[-64.5%--51.1%] | 0.34 | -582.6 | -581.57 | -581.15 | 100% μ=-1.228 σ=0.040 p5/50/95=-1.286/-1.228/-1.164 | 0.07248954097943777 | -0.580 | -0.739
+BTCUSDT|5m|partial_be | OOS | 3726 | 731 | 92.7% | 30.5%[27.2%-34.1%] | 0.85 | -1.35 | -0.560[-64.0%--47.6%] | 0.35 | -379.4 | -384.17 | -377.95 | 100% μ=-1.265 σ=0.057 p5/50/95=-1.352/-1.262/-1.177 | 0.016513515402755717 | -0.559 | -0.720
+BTCUSDT|5m|tp1_full | IS | 3726 | 1163 | 93.2% | 29.8%[27.1%-32.6%] | 1.37 | -1.32 | -0.420[-49.6%--34.1%] | 0.52 | -455.1 | -454.46 | -453.66 | 100% μ=-0.904 σ=0.048 p5/50/95=-0.980/-0.904/-0.829 | 0.07788232759333351 | -0.579 | -0.738
+BTCUSDT|5m|tp1_full | OOS | 3726 | 786 | 92.6% | 31.0%[27.8%-34.5%] | 1.37 | -1.34 | -0.367[-47.1%--26.3%] | 0.57 | -267.2 | -273.87 | -265.77 | 100% μ=-0.946 σ=0.061 p5/50/95=-1.043/-0.943/-0.848 | 0.021912770040540177 | -0.527 | -0.686
+
+=== OOS score calibration — BTCUSDT|15m|partial_be ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      35  0.257143 0.141629 0.420696  -0.676273 not enough data
+ [60, 65)      47  0.276596 0.169364 0.417588  -0.560317 not enough data
+ [65, 70)      63  0.285714 0.189030 0.407030  -0.603005 not enough data
+ [70, 75)      94  0.361702 0.271768 0.462497  -0.419731 not enough data
+ [75, 80)      88  0.340909 0.250390 0.444737  -0.506698 not enough data
+ [80, 85)      95  0.263158 0.185064 0.359662  -0.586958 not enough data
+ [85, 90)      52  0.346154 0.231508 0.481967  -0.565362 not enough data
+ [90, 95)      43  0.372093 0.243761 0.521405  -0.515818 not enough data
+[95, 100)      11  0.272727 0.097459 0.565650  -0.887320 not enough data
+
+=== OOS score calibration — BTCUSDT|15m|tp1_full ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      38  0.289474 0.170031 0.447574  -0.432381 not enough data
+ [60, 65)      50  0.280000 0.174740 0.416654  -0.424391 not enough data
+ [65, 70)      61  0.278689 0.181884 0.401717  -0.499812 not enough data
+ [70, 75)     103  0.368932 0.282028 0.465261  -0.218733                
+ [75, 80)      94  0.340426 0.252588 0.440794  -0.304833 not enough data
+ [80, 85)     106  0.292453 0.214332 0.385091  -0.384253                
+ [85, 90)      56  0.321429 0.214008 0.451776  -0.396369 not enough data
+ [90, 95)      44  0.340909 0.218756 0.488611  -0.362572 not enough data
+[95, 100)      11  0.272727 0.097459 0.565650  -0.599564 not enough data
+
+=== OOS score calibration — BTCUSDT|1h|partial_be ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      10  0.300000 0.107789 0.603227  -0.757393 not enough data
+ [60, 65)      12  0.666667 0.390618 0.861882   0.230776 not enough data
+ [65, 70)      13  0.461538 0.232058 0.708566  -0.219809 not enough data
+ [70, 75)      21  0.190476 0.076674 0.400010  -0.856801 not enough data
+ [75, 80)      24  0.166667 0.066786 0.358535  -0.764418 not enough data
+ [80, 85)      29  0.448276 0.284129 0.624523  -0.376815 not enough data
+ [85, 90)      19  0.473684 0.273295 0.682925  -0.295282 not enough data
+ [90, 95)      19  0.315789 0.153642 0.539900  -0.551423 not enough data
+[95, 100)       1  1.000000 0.206543 1.000000   1.115377 not enough data
+
+=== OOS score calibration — BTCUSDT|1h|tp1_full ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      11  0.272727 0.097459 0.565650  -0.572802 not enough data
+ [60, 65)      11  0.727273 0.434350 0.902541   0.752419 not enough data
+ [65, 70)      14  0.500000 0.267989 0.732011   0.104535 not enough data
+ [70, 75)      22  0.227273 0.101229 0.434404  -0.668556 not enough data
+ [75, 80)      23  0.130435 0.045376 0.321279  -0.750673 not enough data
+ [80, 85)      30  0.433333 0.273772 0.608030  -0.128236 not enough data
+ [85, 90)      20  0.550000 0.342082 0.741805   0.192682 not enough data
+ [90, 95)      22  0.272727 0.131506 0.481521  -0.561568 not enough data
+[95, 100)       1  1.000000 0.206543 1.000000   1.326060 not enough data
+
+=== OOS score calibration — BTCUSDT|5m|partial_be ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      33  0.242424 0.128316 0.410249  -0.806509 not enough data
+ [60, 65)      63  0.333333 0.229494 0.456330  -0.422473 not enough data
+ [65, 70)      82  0.231707 0.153653 0.333775  -0.624666 not enough data
+ [70, 75)     153  0.320261 0.251510 0.397818  -0.515445                
+ [75, 80)     125  0.296000 0.223024 0.381141  -0.607158                
+ [80, 85)     123  0.284553 0.212285 0.369871  -0.609284                
+ [85, 90)      65  0.430769 0.317593 0.551672  -0.376977 not enough data
+ [90, 95)      30  0.266667 0.141825 0.444483  -0.749738 not enough data
+[95, 100)       4  0.500000 0.150036 0.849964   0.441274 not enough data
+
+=== OOS score calibration — BTCUSDT|5m|tp1_full ===
+   bucket  trades  win_rate   ci_low  ci_high  avg_net_r            note
+ [55, 60)      37  0.216216 0.113864 0.371955  -0.691444 not enough data
+ [60, 65)      64  0.343750 0.239230 0.465966  -0.211454 not enough data
+ [65, 70)      90  0.244444 0.167327 0.342486  -0.457640 not enough data
+ [70, 75)     169  0.331361 0.264835 0.405384  -0.299784                
+ [75, 80)     131  0.312977 0.239856 0.396755  -0.363232                
+ [80, 85)     136  0.294118 0.224042 0.375505  -0.432498                
+ [85, 90)      66  0.409091 0.298672 0.529510  -0.202564 not enough data
+ [90, 95)      31  0.258065 0.137015 0.432465  -0.602054 not enough data
+[95, 100)       4  0.500000 0.150036 0.849964   0.552471 not enough data
+
+=== Diagnostics (BTCUSDT) ===
+
+### BTCUSDT 5m
+
+--- IS ---
+Gross vs net: {'expectancy_gross_r': -0.10150367411827416, 'expectancy_net_r': -0.4198215443518421, 'avg_cost_r_per_trade': 0.31831787023356795, 'median_cost_r': 0.33305210570855925}
+SL / cost buckets: {'sl_pct_median': 0.420061852897679, 'sl_atr_median': 1.7670041847380005, 'sl_widened_fee_floor_share': 0.827490774907749, 'cost_as_pct_of_gross_r_buckets': {'<10%': 6, '10-20%': 313, '20-33%': 667, '>33%': 98}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.6817343173431735, 'pct_reach_1r_before_exit': 0.48985239852398527, 'pct_reach_1p5r_before_exit': 0.36162361623616235, 'median_mfe_losing_trades_r': 0.525888040817516, 'pct_sl_within_2_bars_after_fill': 0.24885496183206107}
+btc_regime unknown: 55/1084 (5.1%)
+
+Breakdown by strategy (IS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest     613  0.298532  -0.115204 -0.430238
+ trend_pullback     471  0.297240  -0.083673 -0.406265
+
+Breakdown by direction (IS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     827  0.296252  -0.121515 -0.437037
+     LONG     257  0.303502  -0.037109 -0.364424
+
+Breakdown by entry_type (IS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market     663  0.280543  -0.159164 -0.477642
+     limit     421  0.325416  -0.010698 -0.328764
+
+Breakdown by btc_regime (IS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+above_ema200     658  0.308511  -0.064322 -0.384185
+below_ema200     371  0.277628  -0.159639 -0.475482
+     unknown      55  0.309091  -0.154180 -0.470708
+
+Breakdown by hour_pkt (IS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       19     103  0.339806   0.007528 -0.323101
+       20      94  0.340426  -0.007097 -0.318474
+       18      70  0.342857  -0.088044 -0.413575
+        0      60  0.250000  -0.111393 -0.431178
+       21      60  0.366667   0.097426 -0.215956
+        7      57  0.245614  -0.308815 -0.635296
+       23      57  0.368421   0.150362 -0.170853
+        5      55  0.254545  -0.296329 -0.619933
+       22      55  0.254545  -0.171090 -0.478800
+        6      52  0.307692  -0.035011 -0.349868
+        4      50  0.260000  -0.230815 -0.546991
+        1      42  0.190476  -0.357514 -0.649712
+        2      42  0.119048  -0.564701 -0.875485
+       17      34  0.235294  -0.327541 -0.649144
+        3      33  0.303030  -0.044729 -0.350387
+        9      32  0.218750  -0.322872 -0.632505
+        8      29  0.275862  -0.224039 -0.540222
+       14      27  0.259259  -0.207179 -0.530895
+       16      24  0.333333  -0.105398 -0.431433
+       10      23  0.478261   0.428122  0.102230
+
+Breakdown by weekday (IS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       1     204  0.333333   0.027706 -0.288773
+       4     194  0.278351  -0.219575 -0.534629
+       0     190  0.289474  -0.125028 -0.438207
+       2     182  0.269231  -0.181429 -0.502406
+       3     178  0.320225  -0.066704 -0.387878
+       5      70  0.242857  -0.128053 -0.453218
+       6      66  0.348485   0.068607 -0.257487
+
+Breakdown by atr_quintile (IS):
+   atr_quintile  trades  win_rate  gross_e_r   net_e_r
+ (0.999, 217.6]     217  0.239631  -0.230098 -0.563197
+ (217.6, 434.2]     217  0.322581   0.022003 -0.310645
+ (650.8, 867.4]     217  0.271889  -0.251529 -0.570978
+(867.4, 1084.0]     217  0.345622  -0.030762 -0.307348
+ (434.2, 650.8]     216  0.310185  -0.016741 -0.346602
+
+Breakdown by score_bucket (IS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [75, 85)     377  0.305040  -0.066347 -0.382178
+    [65, 75)     364  0.291209  -0.118536 -0.436700
+   [85, 100)     194  0.324742  -0.037014 -0.357900
+    [55, 65)     149  0.261745  -0.232813 -0.554459
+
+What-if exits (IS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                     note
+    IS   1.0      1.0         8           -0.028585         -0.419822 IS: for exploration only
+    IS   1.0      1.0        16           -0.035159         -0.419822 IS: for exploration only
+    IS   1.0      1.0        32           -0.031203         -0.419822 IS: for exploration only
+    IS   1.0      1.5         8           -0.024578         -0.419822 IS: for exploration only
+    IS   1.0      1.5        16           -0.035980         -0.419822 IS: for exploration only
+    IS   1.0      1.5        32           -0.031554         -0.419822 IS: for exploration only
+    IS   1.0      2.0         8           -0.029985         -0.419822 IS: for exploration only
+    IS   1.0      2.0        16           -0.055382         -0.419822 IS: for exploration only
+    IS   1.0      2.0        32           -0.045887         -0.419822 IS: for exploration only
+    IS   1.5      1.0         8           -0.046115         -0.419822 IS: for exploration only
+    IS   1.5      1.0        16           -0.049679         -0.419822 IS: for exploration only
+    IS   1.5      1.0        32           -0.047516         -0.419822 IS: for exploration only
+    IS   1.5      1.5         8           -0.052454         -0.419822 IS: for exploration only
+    IS   1.5      1.5        16           -0.060735         -0.419822 IS: for exploration only
+    IS   1.5      1.5        32           -0.059695         -0.419822 IS: for exploration only
+    IS   1.5      2.0         8           -0.058906         -0.419822 IS: for exploration only
+    IS   1.5      2.0        16           -0.083690         -0.419822 IS: for exploration only
+    IS   1.5      2.0        32           -0.078257         -0.419822 IS: for exploration only
+    IS   2.0      1.0         8           -0.059670         -0.419822 IS: for exploration only
+    IS   2.0      1.0        16           -0.044096         -0.419822 IS: for exploration only
+    IS   2.0      1.0        32           -0.046795         -0.419822 IS: for exploration only
+    IS   2.0      1.5         8           -0.062804         -0.419822 IS: for exploration only
+    IS   2.0      1.5        16           -0.051636         -0.419822 IS: for exploration only
+    IS   2.0      1.5        32           -0.054625         -0.419822 IS: for exploration only
+    IS   2.0      2.0         8           -0.075904         -0.419822 IS: for exploration only
+    IS   2.0      2.0        16           -0.094348         -0.419822 IS: for exploration only
+    IS   2.0      2.0        32           -0.097207         -0.419822 IS: for exploration only
+
+Fee scenarios (IS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both           -0.101504         -0.419822
+   maker_entry_maker_tp           -0.101504         -0.393350
+       low_fee_exchange           -0.101504         -0.347876
+
+--- OOS ---
+Gross vs net: {'expectancy_gross_r': -0.04768701688992474, 'expectancy_net_r': -0.3670242982057438, 'avg_cost_r_per_trade': 0.319337281315819, 'median_cost_r': 0.3326232436958658}
+SL / cost buckets: {'sl_pct_median': 0.42008631942098373, 'sl_atr_median': 1.765879675640503, 'sl_widened_fee_floor_share': 0.8475274725274725, 'cost_as_pct_of_gross_r_buckets': {'<10%': 7, '10-20%': 220, '20-33%': 446, '>33%': 55}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.7005494505494505, 'pct_reach_1r_before_exit': 0.5260989010989011, 'pct_reach_1p5r_before_exit': 0.3914835164835165, 'median_mfe_losing_trades_r': 0.5438334083433645, 'pct_sl_within_2_bars_after_fill': 0.2441860465116279}
+btc_regime unknown: 0/728 (0.0%)
+
+Breakdown by strategy (OOS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest     453  0.320088  -0.018845 -0.335163
+ trend_pullback     275  0.294545  -0.095198 -0.419509
+
+Breakdown by direction (OOS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     581  0.332186   0.006748 -0.310486
+     LONG     147  0.224490  -0.262836 -0.590486
+
+Breakdown by entry_type (OOS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market     464  0.318966   -0.03762 -0.356242
+     limit     264  0.295455   -0.06538 -0.385976
+
+Breakdown by btc_regime (OOS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+below_ema200     621  0.312399  -0.052761 -0.371151
+above_ema200     107  0.299065  -0.018236 -0.343072
+
+Breakdown by hour_pkt (OOS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       19      77  0.376623   0.109145 -0.213814
+       18      61  0.213115  -0.428757 -0.757380
+       21      48  0.312500   0.094711 -0.211621
+       20      43  0.465116   0.302832  0.005244
+       22      39  0.230769  -0.141516 -0.463977
+       23      39  0.205128  -0.392123 -0.709686
+        3      37  0.243243  -0.190948 -0.509591
+        5      31  0.129032  -0.479567 -0.806926
+        7      30  0.166667  -0.565856 -0.891980
+        8      29  0.448276   0.410100  0.085982
+       17      27  0.333333  -0.028635 -0.336361
+        9      26  0.346154  -0.057295 -0.347056
+        6      26  0.615385   0.851197  0.525632
+        0      25  0.120000  -0.475734 -0.788550
+        2      25  0.240000  -0.246686 -0.573002
+       16      24  0.416667   0.107279 -0.224744
+       14      23  0.304348  -0.156002 -0.485775
+        1      22  0.409091   0.182925 -0.133302
+       13      20  0.300000   0.281587 -0.051438
+        4      19  0.368421   0.117234 -0.200248
+
+Breakdown by weekday (OOS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       3     140  0.350000   0.082895 -0.237521
+       2     132  0.318182  -0.011387 -0.333195
+       0     132  0.287879  -0.149071 -0.469980
+       1     128  0.273438  -0.180690 -0.500528
+       4     120  0.350000   0.020298 -0.296118
+       5      38  0.236842  -0.059902 -0.365834
+       6      38  0.289474  -0.057159 -0.379424
+
+Breakdown by atr_quintile (OOS):
+  atr_quintile  trades  win_rate  gross_e_r   net_e_r
+(0.999, 146.4]     146  0.260274  -0.071655 -0.404768
+(291.8, 437.2]     146  0.301370  -0.084047 -0.415798
+(582.6, 728.0]     146  0.363014   0.032331 -0.245834
+(146.4, 291.8]     145  0.282759  -0.097297 -0.430350
+(437.2, 582.6]     145  0.344828  -0.017903 -0.338611
+
+Breakdown by score_bucket (OOS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [75, 85)     267  0.303371  -0.081893 -0.398513
+    [65, 75)     259  0.301158  -0.035364 -0.354638
+    [55, 65)     101  0.297030  -0.062351 -0.387292
+   [85, 100)     101  0.366337   0.025801 -0.295277
+
+What-if exits (OOS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                    note
+   OOS   1.0      1.0         8            0.015721         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      1.0        16            0.043252         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      1.0        32            0.041268         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      1.5         8            0.021273         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      1.5        16            0.059304         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      1.5        32            0.067146         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      2.0         8            0.006143         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      2.0        16            0.054746         -0.367024 OOS: do not tune on OOS
+   OOS   1.0      2.0        32            0.064935         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.0         8           -0.010844         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.0        16            0.012249         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.0        32            0.024539         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.5         8            0.000346         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.5        16            0.036398         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      1.5        32            0.058753         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      2.0         8           -0.013018         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      2.0        16            0.036523         -0.367024 OOS: do not tune on OOS
+   OOS   1.5      2.0        32            0.060372         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.0         8           -0.017388         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.0        16           -0.001720         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.0        32            0.012483         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.5         8           -0.006878         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.5        16            0.022921         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      1.5        32            0.032717         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      2.0         8           -0.022481         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      2.0        16            0.022395         -0.367024 OOS: do not tune on OOS
+   OOS   2.0      2.0        32            0.040552         -0.367024 OOS: do not tune on OOS
+
+Fee scenarios (OOS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both           -0.047687         -0.367024
+   maker_entry_maker_tp           -0.047687         -0.342110
+       low_fee_exchange           -0.047687         -0.296491
+
+### BTCUSDT 15m
+
+--- IS ---
+Gross vs net: {'expectancy_gross_r': -0.020822424855392183, 'expectancy_net_r': -0.3258814889493126, 'avg_cost_r_per_trade': 0.3050590640939205, 'median_cost_r': 0.33258391497192563}
+SL / cost buckets: {'sl_pct_median': 0.4200718905874342, 'sl_atr_median': 1.3810196578948646, 'sl_widened_fee_floor_share': 0.7308558558558559, 'cost_as_pct_of_gross_r_buckets': {'<10%': 18, '10-20%': 312, '20-33%': 512, '>33%': 46}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.6655405405405406, 'pct_reach_1r_before_exit': 0.5011261261261262, 'pct_reach_1p5r_before_exit': 0.39864864864864863, 'median_mfe_losing_trades_r': 0.4633158796778488, 'pct_sl_within_2_bars_after_fill': 0.3766478342749529}
+btc_regime unknown: 32/888 (3.6%)
+
+Breakdown by strategy (IS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest     462  0.322511  -0.094178 -0.389757
+ trend_pullback     426  0.352113   0.058732 -0.256608
+
+Breakdown by direction (IS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     633  0.336493  -0.045622 -0.344524
+     LONG     255  0.337255   0.040738 -0.279605
+
+Breakdown by entry_type (IS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market     490  0.342857  -0.009045 -0.312525
+     limit     398  0.329146  -0.035322 -0.342325
+
+Breakdown by btc_regime (IS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+above_ema200     548  0.346715   0.015467 -0.297898
+below_ema200     308  0.321429  -0.081761 -0.373975
+     unknown      32  0.312500  -0.055745 -0.342202
+
+Breakdown by hour_pkt (IS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       20      79  0.392405   0.111903 -0.175144
+       19      78  0.410256   0.148200 -0.148017
+       18      65  0.276923  -0.224281 -0.534987
+        5      55  0.327273   0.007713 -0.308138
+        7      51  0.215686  -0.293318 -0.610239
+       17      49  0.387755   0.069570 -0.247372
+       21      47  0.446809   0.230927 -0.048996
+        6      41  0.195122  -0.432392 -0.739702
+       13      41  0.341463  -0.003751 -0.328899
+       12      40  0.275000  -0.214926 -0.540816
+        8      35  0.400000   0.209998 -0.110424
+       22      32  0.375000   0.172373 -0.098169
+       16      31  0.258065  -0.308661 -0.630457
+        9      30  0.333333   0.027990 -0.280200
+       14      28  0.464286   0.248354 -0.077796
+        4      25  0.600000   0.715138  0.415393
+       15      24  0.375000   0.096270 -0.226658
+       10      23  0.260870  -0.025762 -0.349656
+       11      22  0.272727  -0.222769 -0.543166
+       23      21  0.190476  -0.423430 -0.662813
+
+Breakdown by weekday (IS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       1     161  0.329193  -0.100318 -0.396169
+       0     142  0.394366   0.094930 -0.205573
+       4     139  0.316547  -0.083806 -0.381262
+       2     134  0.253731  -0.305859 -0.614986
+       3     133  0.406015   0.171759 -0.133745
+       6      99  0.383838   0.123551 -0.191624
+       5      80  0.250000   0.021743 -0.303070
+
+Breakdown by atr_quintile (IS):
+  atr_quintile  trades  win_rate  gross_e_r   net_e_r
+(0.999, 178.4]     178  0.342697   0.060475 -0.272419
+(355.8, 533.2]     178  0.325843  -0.084317 -0.403998
+(710.6, 888.0]     178  0.325843  -0.082300 -0.319806
+(178.4, 355.8]     177  0.389831   0.174261 -0.156744
+(533.2, 710.6]     177  0.299435  -0.171984 -0.476336
+
+Breakdown by score_bucket (IS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [75, 85)     300  0.323333  -0.074009 -0.376017
+    [65, 75)     283  0.353357   0.038105 -0.272176
+   [85, 100)     172  0.337209   0.008474 -0.294453
+    [55, 65)     133  0.330827  -0.064126 -0.367713
+
+What-if exits (IS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                     note
+    IS   1.0      1.0         8           -0.040310         -0.325881 IS: for exploration only
+    IS   1.0      1.0        16           -0.033897         -0.325881 IS: for exploration only
+    IS   1.0      1.0        32           -0.019411         -0.325881 IS: for exploration only
+    IS   1.0      1.5         8           -0.051762         -0.325881 IS: for exploration only
+    IS   1.0      1.5        16           -0.030948         -0.325881 IS: for exploration only
+    IS   1.0      1.5        32           -0.020137         -0.325881 IS: for exploration only
+    IS   1.0      2.0         8           -0.056356         -0.325881 IS: for exploration only
+    IS   1.0      2.0        16           -0.026711         -0.325881 IS: for exploration only
+    IS   1.0      2.0        32           -0.008984         -0.325881 IS: for exploration only
+    IS   1.5      1.0         8           -0.046046         -0.325881 IS: for exploration only
+    IS   1.5      1.0        16           -0.031075         -0.325881 IS: for exploration only
+    IS   1.5      1.0        32            0.009898         -0.325881 IS: for exploration only
+    IS   1.5      1.5         8           -0.054950         -0.325881 IS: for exploration only
+    IS   1.5      1.5        16           -0.014738         -0.325881 IS: for exploration only
+    IS   1.5      1.5        32            0.010602         -0.325881 IS: for exploration only
+    IS   1.5      2.0         8           -0.061360         -0.325881 IS: for exploration only
+    IS   1.5      2.0        16           -0.014973         -0.325881 IS: for exploration only
+    IS   1.5      2.0        32            0.015145         -0.325881 IS: for exploration only
+    IS   2.0      1.0         8           -0.035233         -0.325881 IS: for exploration only
+    IS   2.0      1.0        16           -0.014296         -0.325881 IS: for exploration only
+    IS   2.0      1.0        32            0.036678         -0.325881 IS: for exploration only
+    IS   2.0      1.5         8           -0.052940         -0.325881 IS: for exploration only
+    IS   2.0      1.5        16           -0.021388         -0.325881 IS: for exploration only
+    IS   2.0      1.5        32            0.029153         -0.325881 IS: for exploration only
+    IS   2.0      2.0         8           -0.065150         -0.325881 IS: for exploration only
+    IS   2.0      2.0        16           -0.019969         -0.325881 IS: for exploration only
+    IS   2.0      2.0        32            0.044023         -0.325881 IS: for exploration only
+
+Fee scenarios (IS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both           -0.020822         -0.325881
+   maker_entry_maker_tp           -0.020822         -0.296396
+       low_fee_exchange           -0.020822         -0.252817
+
+--- OOS ---
+Gross vs net: {'expectancy_gross_r': -0.06245914768979835, 'expectancy_net_r': -0.363762318292552, 'avg_cost_r_per_trade': 0.3013031706027537, 'median_cost_r': 0.3325668314774788}
+SL / cost buckets: {'sl_pct_median': 0.4200938280631251, 'sl_atr_median': 1.4434219618569524, 'sl_widened_fee_floor_share': 0.7300177619893428, 'cost_as_pct_of_gross_r_buckets': {'<10%': 16, '10-20%': 193, '20-33%': 317, '>33%': 37}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.6749555950266429, 'pct_reach_1r_before_exit': 0.49023090586145646, 'pct_reach_1p5r_before_exit': 0.38543516873889877, 'median_mfe_losing_trades_r': 0.48702634813096235, 'pct_sl_within_2_bars_after_fill': 0.40175953079178883}
+btc_regime unknown: 0/563 (0.0%)
+
+Breakdown by strategy (OOS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest     305  0.340984   0.009527 -0.280527
+ trend_pullback     258  0.290698  -0.147559 -0.462161
+
+Breakdown by direction (OOS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     433  0.332564  -0.017684 -0.311955
+     LONG     130  0.269231  -0.211595 -0.536321
+
+Breakdown by entry_type (OOS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market     308  0.324675  -0.052178 -0.349301
+     limit     255  0.309804  -0.074877 -0.381229
+
+Breakdown by btc_regime (OOS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+below_ema200     439  0.325740  -0.056069 -0.352552
+above_ema200     124  0.290323  -0.085081 -0.403450
+
+Breakdown by hour_pkt (OOS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       19      50  0.360000   0.133066 -0.163500
+       20      46  0.282609  -0.075077 -0.348168
+        6      39  0.230769  -0.332673 -0.640904
+       13      36  0.500000   0.368501  0.045089
+       18      36  0.333333   0.006622 -0.292168
+       17      33  0.454545   0.295507 -0.004447
+       10      26  0.346154   0.043588 -0.271796
+        5      22  0.090909  -0.715627 -1.032488
+       11      22  0.318182  -0.173945 -0.485641
+        7      22  0.136364  -0.607692 -0.909359
+       21      22  0.409091   0.255318 -0.018966
+        9      21  0.285714  -0.239897 -0.542617
+       22      21  0.285714  -0.030348 -0.309972
+        4      20  0.300000   0.098649 -0.196495
+       14      20  0.200000  -0.452392 -0.772011
+       12      19  0.315789  -0.192852 -0.515931
+       16      19  0.578947   0.589848  0.279136
+       15      19  0.368421   0.120876 -0.205094
+        8      18  0.388889   0.063704 -0.223201
+        2      15  0.200000  -0.421293 -0.712180
+
+Breakdown by weekday (OOS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       0     107  0.299065  -0.171902 -0.472500
+       2      99  0.373737   0.076677 -0.235580
+       1      98  0.316327  -0.122341 -0.422727
+       3      86  0.325581   0.006973 -0.299664
+       4      84  0.297619  -0.092594 -0.378835
+       6      53  0.320755  -0.066500 -0.370183
+       5      36  0.250000  -0.046386 -0.341056
+
+Breakdown by atr_quintile (OOS):
+  atr_quintile  trades  win_rate  gross_e_r   net_e_r
+(0.999, 113.4]     113  0.283186  -0.100181 -0.433369
+(225.8, 338.2]     113  0.309735  -0.098544 -0.419510
+(450.6, 563.0]     113  0.309735  -0.090672 -0.321595
+(113.4, 225.8]     112  0.383929   0.114079 -0.214879
+(338.2, 450.6]     112  0.303571  -0.136067 -0.428714
+
+Breakdown by score_bucket (OOS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [75, 85)     200  0.315000  -0.056310 -0.346925
+    [65, 75)     164  0.335366  -0.014923 -0.323281
+   [85, 100)     111  0.324324  -0.100904 -0.403108
+    [55, 65)      88  0.284091  -0.116530 -0.427841
+
+What-if exits (OOS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                    note
+   OOS   1.0      1.0         8           -0.043806         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      1.0        16           -0.035761         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      1.0        32           -0.042753         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      1.5         8           -0.028816         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      1.5        16           -0.007321         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      1.5        32           -0.018269         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      2.0         8           -0.022594         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      2.0        16            0.005729         -0.363762 OOS: do not tune on OOS
+   OOS   1.0      2.0        32            0.013062         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.0         8           -0.050021         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.0        16           -0.026995         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.0        32           -0.034242         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.5         8           -0.036901         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.5        16            0.015820         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      1.5        32           -0.005226         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      2.0         8           -0.044239         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      2.0        16            0.025581         -0.363762 OOS: do not tune on OOS
+   OOS   1.5      2.0        32            0.000813         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.0         8           -0.040840         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.0        16           -0.024048         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.0        32           -0.032046         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.5         8           -0.032615         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.5        16            0.000964         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      1.5        32            0.007829         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      2.0         8           -0.036213         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      2.0        16            0.026800         -0.363762 OOS: do not tune on OOS
+   OOS   2.0      2.0        32            0.024683         -0.363762 OOS: do not tune on OOS
+
+Fee scenarios (OOS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both           -0.062459         -0.363762
+   maker_entry_maker_tp           -0.062459         -0.334026
+       low_fee_exchange           -0.062459         -0.290982
+
+### BTCUSDT 1h
+
+--- IS ---
+Gross vs net: {'expectancy_gross_r': 0.038799809196729984, 'expectancy_net_r': -0.19386681706698936, 'avg_cost_r_per_trade': 0.23266662626371934, 'median_cost_r': 0.23292702961335998}
+SL / cost buckets: {'sl_pct_median': 0.6001652244194262, 'sl_atr_median': 0.9706230207554816, 'sl_widened_fee_floor_share': 0.29924242424242425, 'cost_as_pct_of_gross_r_buckets': {'<10%': 43, '10-20%': 106, '20-33%': 106, '>33%': 9}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.7234848484848485, 'pct_reach_1r_before_exit': 0.5606060606060606, 'pct_reach_1p5r_before_exit': 0.4318181818181818, 'median_mfe_losing_trades_r': 0.556643899174658, 'pct_sl_within_2_bars_after_fill': 0.5100671140939598}
+btc_regime unknown: 2/264 (0.8%)
+
+Breakdown by strategy (IS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest     143  0.440559   0.236738  0.025485
+ trend_pullback     121  0.289256  -0.195128 -0.453101
+
+Breakdown by direction (IS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     184  0.396739   0.113020 -0.106272
+     LONG      80  0.312500  -0.131906 -0.395334
+
+Breakdown by entry_type (IS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market     148  0.337838  -0.078918 -0.308738
+     limit     116  0.413793   0.188992 -0.047307
+
+Breakdown by btc_regime (IS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+above_ema200     178  0.376404   0.047385 -0.197470
+below_ema200      84  0.357143   0.010501 -0.198819
+
+Breakdown by hour_pkt (IS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       20      23  0.260870  -0.101295 -0.295628
+       19      19  0.315789  -0.093151 -0.335647
+       21      19  0.473684   0.310174  0.108869
+       23      16  0.125000  -0.582344 -0.812312
+       18      15  0.600000   0.597587  0.366674
+       17      14  0.214286  -0.453365 -0.705954
+        0      13  0.230769  -0.187037 -0.415175
+        7      13  0.461538   0.298736  0.070355
+        1      11  0.363636   0.063523 -0.210536
+        2      11  0.454545   0.084423 -0.154660
+       22      11  0.181818  -0.477352 -0.668305
+        6      11  0.454545   0.152563 -0.099876
+       16      11  0.363636  -0.074052 -0.337363
+       15      10  0.300000  -0.287923 -0.537131
+        3      10  0.300000  -0.154627 -0.382621
+        8      10  0.600000   0.746310  0.552520
+        5       9  0.333333  -0.102981 -0.369569
+       14       8  0.625000   0.618699  0.401850
+        4       7  0.285714   0.089895 -0.130974
+       12       6  0.333333  -0.240237 -0.509773
+
+Breakdown by weekday (IS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       0      53  0.433962   0.144240 -0.078005
+       3      47  0.489362   0.389995  0.166217
+       4      42  0.261905  -0.215586 -0.419002
+       6      40  0.400000   0.024044 -0.270255
+       1      29  0.482759   0.304148  0.105040
+       2      29  0.206897  -0.547177 -0.767575
+       5      24  0.208333  -0.024611 -0.301541
+
+Breakdown by atr_quintile (IS):
+  atr_quintile  trades  win_rate  gross_e_r   net_e_r
+ (0.999, 53.6]      53  0.377358   0.020430 -0.298533
+ (53.6, 106.2]      53  0.415094   0.126308 -0.143640
+(158.8, 211.4]      53  0.320755  -0.049831 -0.257222
+(211.4, 264.0]      53  0.433962   0.218807  0.085241
+(106.2, 158.8]      52  0.307692  -0.124802 -0.358283
+
+Breakdown by score_bucket (IS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [65, 75)      88  0.375000   0.088240 -0.149935
+    [75, 85)      79  0.354430   0.012310 -0.195576
+   [85, 100)      55  0.327273  -0.170009 -0.422665
+    [55, 65)      42  0.452381   0.258477  0.016916
+
+What-if exits (IS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                     note
+    IS   1.0      1.0         8            0.075589         -0.193867 IS: for exploration only
+    IS   1.0      1.0        16            0.083980         -0.193867 IS: for exploration only
+    IS   1.0      1.0        32            0.080360         -0.193867 IS: for exploration only
+    IS   1.0      1.5         8            0.056748         -0.193867 IS: for exploration only
+    IS   1.0      1.5        16            0.074863         -0.193867 IS: for exploration only
+    IS   1.0      1.5        32            0.054654         -0.193867 IS: for exploration only
+    IS   1.0      2.0         8            0.041381         -0.193867 IS: for exploration only
+    IS   1.0      2.0        16            0.070552         -0.193867 IS: for exploration only
+    IS   1.0      2.0        32            0.058410         -0.193867 IS: for exploration only
+    IS   1.5      1.0         8            0.097020         -0.193867 IS: for exploration only
+    IS   1.5      1.0        16            0.134082         -0.193867 IS: for exploration only
+    IS   1.5      1.0        32            0.120721         -0.193867 IS: for exploration only
+    IS   1.5      1.5         8            0.074317         -0.193867 IS: for exploration only
+    IS   1.5      1.5        16            0.129589         -0.193867 IS: for exploration only
+    IS   1.5      1.5        32            0.079118         -0.193867 IS: for exploration only
+    IS   1.5      2.0         8            0.052752         -0.193867 IS: for exploration only
+    IS   1.5      2.0        16            0.115079         -0.193867 IS: for exploration only
+    IS   1.5      2.0        32            0.055656         -0.193867 IS: for exploration only
+    IS   2.0      1.0         8            0.049971         -0.193867 IS: for exploration only
+    IS   2.0      1.0        16            0.078271         -0.193867 IS: for exploration only
+    IS   2.0      1.0        32            0.043100         -0.193867 IS: for exploration only
+    IS   2.0      1.5         8            0.022495         -0.193867 IS: for exploration only
+    IS   2.0      1.5        16            0.082200         -0.193867 IS: for exploration only
+    IS   2.0      1.5        32            0.004831         -0.193867 IS: for exploration only
+    IS   2.0      2.0         8           -0.009597         -0.193867 IS: for exploration only
+    IS   2.0      2.0        16            0.067740         -0.193867 IS: for exploration only
+    IS   2.0      2.0        32            0.009778         -0.193867 IS: for exploration only
+
+Fee scenarios (IS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both              0.0388         -0.193867
+   maker_entry_maker_tp              0.0388         -0.171606
+       low_fee_exchange              0.0388         -0.138368
+
+--- OOS ---
+Gross vs net: {'expectancy_gross_r': -0.0033553280080419307, 'expectancy_net_r': -0.2568590365768046, 'avg_cost_r_per_trade': 0.25350370856876264, 'median_cost_r': 0.258166838286115}
+SL / cost buckets: {'sl_pct_median': 0.5400742468726081, 'sl_atr_median': 0.9877192104243713, 'sl_widened_fee_floor_share': 0.38311688311688313, 'cost_as_pct_of_gross_r_buckets': {'<10%': 12, '10-20%': 73, '20-33%': 67, '>33%': 2}}
+MFE/MAE: {'pct_reach_0p5r_before_exit': 0.7272727272727273, 'pct_reach_1r_before_exit': 0.538961038961039, 'pct_reach_1p5r_before_exit': 0.42207792207792205, 'median_mfe_losing_trades_r': 0.5867729371688039, 'pct_sl_within_2_bars_after_fill': 0.48936170212765956}
+btc_regime unknown: 0/154 (0.0%)
+
+Breakdown by strategy (OOS):
+       strategy  trades  win_rate  gross_e_r   net_e_r
+breakout_retest      80  0.362500  -0.032924 -0.257969
+ trend_pullback      74  0.378378   0.028611 -0.255659
+
+Breakdown by direction (OOS):
+direction  trades  win_rate  gross_e_r   net_e_r
+    SHORT     115  0.373913  -0.001993 -0.243978
+     LONG      39  0.358974  -0.007372 -0.294843
+
+Breakdown by entry_type (OOS):
+entry_type  trades  win_rate  gross_e_r   net_e_r
+    market      88  0.375000  -0.001846 -0.242950
+     limit      66  0.363636  -0.005368 -0.275404
+
+Breakdown by btc_regime (OOS):
+  btc_regime  trades  win_rate  gross_e_r   net_e_r
+below_ema200     109  0.357798  -0.048203 -0.296037
+above_ema200      45  0.400000   0.105276 -0.161961
+
+Breakdown by hour_pkt (OOS):
+ hour_pkt  trades  win_rate  gross_e_r   net_e_r
+       19      20  0.550000   0.471504  0.224033
+       17      13  0.230769  -0.333841 -0.624836
+       22      13  0.307692   0.016793 -0.228374
+       18      10  0.300000  -0.170181 -0.412971
+       21      10  0.400000  -0.000419 -0.229469
+       15       8  0.250000  -0.324751 -0.574602
+       23       7  0.428571   0.154478 -0.019398
+       20       6  0.333333  -0.112486 -0.386066
+       10       6  0.333333  -0.092456 -0.416300
+       16       5  0.200000  -0.480835 -0.730712
+       12       5  0.400000   0.061607 -0.166151
+        4       5  0.600000   0.663893  0.422278
+        6       5  0.600000   0.451823  0.214708
+        1       5  0.400000   0.084994 -0.193878
+        7       5  0.000000  -1.064797 -1.291428
+        9       4  0.500000   0.245354 -0.037298
+        5       4  0.500000   0.217602 -0.009263
+        3       4  1.000000   1.772812  1.521913
+        8       4  0.250000  -0.329034 -0.605171
+       11       4  0.000000  -1.075791 -1.340973
+
+Breakdown by weekday (OOS):
+ weekday  trades  win_rate  gross_e_r   net_e_r
+       0      31  0.451613   0.188826 -0.071706
+       3      27  0.333333  -0.106492 -0.346880
+       4      23  0.217391  -0.448528 -0.678437
+       6      21  0.380952   0.033670 -0.283033
+       1      19  0.421053   0.204823 -0.010326
+       2      19  0.315789  -0.181135 -0.432631
+       5      14  0.500000   0.404570  0.142591
+
+Breakdown by atr_quintile (OOS):
+  atr_quintile  trades  win_rate  gross_e_r   net_e_r
+ (0.999, 31.6]      31  0.387097   0.073918 -0.252294
+  (31.6, 62.2]      31  0.483871   0.271023 -0.018666
+ (92.8, 123.4]      31  0.387097   0.011191 -0.194749
+(123.4, 154.0]      31  0.258065  -0.239378 -0.417973
+  (62.2, 92.8]      30  0.333333  -0.137870 -0.405405
+
+Breakdown by score_bucket (OOS):
+score_bucket  trades  win_rate  gross_e_r   net_e_r
+    [75, 85)      53  0.301887  -0.144208 -0.398350
+   [85, 100)      43  0.418605   0.104911 -0.166855
+    [65, 75)      36  0.333333  -0.124670 -0.367909
+    [55, 65)      22  0.500000   0.322874  0.089809
+
+What-if exits (OOS):
+sample  tp_r  sl_mult  max_hold  expectancy_gross_r  expectancy_net_r                    note
+   OOS   1.0      1.0         8            0.009883         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      1.0        16           -0.006248         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      1.0        32            0.002759         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      1.5         8           -0.007675         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      1.5        16           -0.036568         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      1.5        32           -0.023890         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      2.0         8           -0.009039         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      2.0        16           -0.063924         -0.256859 OOS: do not tune on OOS
+   OOS   1.0      2.0        32           -0.072416         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.0         8            0.038122         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.0        16            0.038195         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.0        32            0.060318         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.5         8            0.037777         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.5        16            0.039224         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      1.5        32            0.056397         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      2.0         8            0.028904         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      2.0        16            0.016294         -0.256859 OOS: do not tune on OOS
+   OOS   1.5      2.0        32            0.020794         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.0         8           -0.017159         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.0        16            0.034244         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.0        32            0.038877         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.5         8            0.003634         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.5        16            0.071343         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      1.5        32            0.095575         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      2.0         8            0.032805         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      2.0        16            0.097115         -0.256859 OOS: do not tune on OOS
+   OOS   2.0      2.0        32            0.096562         -0.256859 OOS: do not tune on OOS
+
+Fee scenarios (OOS):
+               scenario  expectancy_gross_r  expectancy_net_r
+conservative_taker_both           -0.003355         -0.256859
+   maker_entry_maker_tp           -0.003355         -0.232074
+       low_fee_exchange           -0.003355         -0.195859

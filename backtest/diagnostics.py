@@ -29,7 +29,43 @@ from core.models import Direction, EntryType
 PK = ZoneInfo("Asia/Karachi")
 
 DIAG_SYMBOL = "BTCUSDT"
-DIAG_TF = "15m"
+DIAG_TFS = ("5m", "15m", "1h")
+
+_d1_regime_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+
+def _d1_regime_arrays(sym: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    if sym in _d1_regime_cache:
+        return _d1_regime_cache[sym]
+    try:
+        d1 = ensure_indicators(load_history(sym, "1d"))
+    except FileNotFoundError:
+        return None
+    if "ema_200" not in d1.columns or d1.empty:
+        return None
+    arr = (
+        d1["close_time"].to_numpy(dtype=np.int64),
+        d1["close"].to_numpy(dtype=np.float64),
+        d1["ema_200"].to_numpy(dtype=np.float64),
+    )
+    _d1_regime_cache[sym] = arr
+    return arr
+
+
+def regime_at_signal(sym: str, signal_close_ms: int) -> str:
+    """BTC 1d close vs EMA200 using last *closed* daily bar strictly before signal time."""
+    data = _d1_regime_arrays(sym)
+    if data is None:
+        return "unknown"
+    ct, close, ema = data
+    i = int(np.searchsorted(ct, int(signal_close_ms), side="left")) - 1
+    if i < 0 or np.isnan(ema[i]):
+        return "unknown"
+    return "above_ema200" if close[i] > ema[i] else "below_ema200"
+
+
+def _btc_regime_series(sym: str, close_times: np.ndarray) -> list[str]:
+    return [regime_at_signal(sym, int(t)) for t in close_times]
 
 
 def _sig_val(row: pd.Series, *keys: str, default: float = 0.0) -> float:
@@ -37,6 +73,13 @@ def _sig_val(row: pd.Series, *keys: str, default: float = 0.0) -> float:
         if k in row.index and pd.notna(row[k]):
             return float(row[k])
     return default
+
+
+def _field(row: pd.Series, name: str):
+    for k in (name, f"{name}_sig", f"{name}_tr"):
+        if k in row.index and pd.notna(row[k]):
+            return row[k]
+    return row.get(name)
 
 
 def _merge_trades_signals(trades: pd.DataFrame, signals: pd.DataFrame) -> pd.DataFrame:
@@ -55,10 +98,26 @@ def _merge_trades_signals(trades: pd.DataFrame, signals: pd.DataFrame) -> pd.Dat
         "score",
     ]
     sig = signals[[c for c in cols if c in signals.columns]].drop_duplicates("setup_id")
-    merged = trades.merge(sig, on="setup_id", how="left", suffixes=("", "_sig"))
+    merged = trades.merge(sig, on="setup_id", how="left", suffixes=("_tr", "_sig"))
     if "entry_sig" in merged.columns:
-        merged["entry_level"] = merged["entry_sig"].combine_first(merged.get("entry_level", merged.get("entry", 0)))
+        merged["entry_level"] = merged["entry_sig"].combine_first(merged.get("entry_level", 0))
+    if "close_time_sig" in merged.columns:
+        merged["signal_close_time"] = merged["close_time_sig"]
+    elif "close_time_tr" in merged.columns:
+        merged["signal_close_time"] = merged["close_time_tr"]
+    else:
+        merged["signal_close_time"] = merged.get("close_time", 0)
     return merged
+
+
+def _row_for_cost(row: pd.Series) -> pd.Series:
+    r = row.copy()
+    r["stop_loss"] = _sig_val(row, "stop_loss_sig", "stop_loss")
+    r["entry_level"] = _sig_val(row, "entry_sig", "entry_level", "entry")
+    r["entry"] = r["entry_level"]
+    if "entry_type" not in r.index or pd.isna(r.get("entry_type")):
+        r["entry_type"] = str(_field(row, "entry_type"))
+    return r
 
 
 def _fee_floor_risk(entry: float) -> float:
@@ -135,26 +194,6 @@ def _walk_path_r(
     return gross, mfe, False, min(len(df) - 1, fill_idx + hold) - fill_idx
 
 
-def _btc_regime_series(sym: str, close_times: np.ndarray) -> list[str]:
-    path = Path(f"data/history/{sym}/1d.parquet")
-    if not path.exists():
-        return ["unknown"] * len(close_times)
-    d1 = ensure_indicators(load_history(sym, "1d"))
-    if "ema_200" not in d1.columns:
-        return ["unknown"] * len(close_times)
-    ct = d1["close_time"].to_numpy(dtype=np.int64)
-    close = d1["close"].to_numpy(dtype=np.float64)
-    ema = d1["ema_200"].to_numpy(dtype=np.float64)
-    out: list[str] = []
-    for t in close_times:
-        i = int(np.searchsorted(ct, int(t), side="right")) - 1
-        if i < 0 or np.isnan(ema[i]):
-            out.append("unknown")
-        else:
-            out.append("above_ema200" if close[i] > ema[i] else "below_ema200")
-    return out
-
-
 def _breakdown_table(filled: pd.DataFrame, group_col: str) -> pd.DataFrame:
     rows = []
     for key, grp in filled.groupby(group_col, dropna=False):
@@ -194,7 +233,7 @@ def _sl_diagnostics(filled: pd.DataFrame, frame) -> dict[str, Any]:
     n = 0
     for _, row in filled.iterrows():
         entry = float(row.get("entry_sig", row.get("entry_level", 0)))
-        sl = float(row["stop_loss"])
+        sl = _sig_val(row, "stop_loss_sig", "stop_loss")
         if entry <= 0:
             continue
         risk = abs(entry - sl)
@@ -236,10 +275,10 @@ def _mfe_mae_block(filled: pd.DataFrame, frame, cfg: BacktestConfig) -> dict[str
     df = frame.df
     for _, row in filled.iterrows():
         sim = SimSignal(
-            direction=Direction(str(row["direction"])),
-            entry_type=EntryType(str(row["entry_type"])),
+            direction=Direction(str(_field(row, "direction"))),
+            entry_type=EntryType(str(_field(row, "entry_type"))),
             entry=_sig_val(row, "entry_sig", "entry_level", "entry"),
-            stop_loss=_sig_val(row, "stop_loss"),
+            stop_loss=_sig_val(row, "stop_loss_sig", "stop_loss"),
             tp1=_sig_val(row, "tp1_sig", "tp1"),
             tp2=_sig_val(row, "tp2_sig", "tp2", "tp1_sig", "tp1"),
             tp3=_sig_val(row, "tp3_sig", "tp3", "tp2_sig", "tp2"),
@@ -277,10 +316,10 @@ def _whatif_grid(filled: pd.DataFrame, frame, cfg: BacktestConfig, sample: str) 
                 gross_list: list[float] = []
                 for _, row in filled.iterrows():
                     sim = SimSignal(
-                        direction=Direction(str(row["direction"])),
-                        entry_type=EntryType(str(row["entry_type"])),
+                        direction=Direction(str(_field(row, "direction"))),
+                        entry_type=EntryType(str(_field(row, "entry_type"))),
                         entry=_sig_val(row, "entry_sig", "entry_level", "entry"),
-                        stop_loss=_sig_val(row, "stop_loss"),
+                        stop_loss=_sig_val(row, "stop_loss_sig", "stop_loss"),
                         tp1=_sig_val(row, "tp1_sig", "tp1"),
                         tp2=_sig_val(row, "tp2_sig", "tp2"),
                         tp3=_sig_val(row, "tp3_sig", "tp3"),
@@ -295,9 +334,8 @@ def _whatif_grid(filled: pd.DataFrame, frame, cfg: BacktestConfig, sample: str) 
                 gr = pd.Series(gross_list)
                 net_vals: list[float] = []
                 for j, (_, row) in enumerate(filled.iterrows()):
-                    r = row.copy()
+                    r = _row_for_cost(row)
                     r["r_gross"] = gross_list[j]
-                    r["entry_level"] = float(row.get("entry_sig", row.get("entry_level", 0)))
                     r["entry_price"] = float(row.get("entry_price", r["entry_level"]))
                     r["exit_price"] = float(row.get("exit_price", r["entry_level"]))
                     r["filled"] = True
@@ -334,7 +372,7 @@ def _fee_scenarios(filled: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
     ]
     rows = []
     for name, scfg in scenarios:
-        nets = filled.apply(lambda r, c=scfg: recompute_net_r_row(r, c, 1.0), axis=1)
+        nets = filled.apply(lambda r, c=scfg: recompute_net_r_row(_row_for_cost(r), c, 1.0), axis=1)
         gross = filled["r_gross"].astype(float)
         rows.append(
             {
@@ -346,60 +384,67 @@ def _fee_scenarios(filled: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def run_diagnostics(
-    run_dir: Path,
+def _diagnose_timeframe(
+    tf: str,
     signals: pd.DataFrame,
     trades: pd.DataFrame,
     cfg: BacktestConfig,
-    symbols: list[str],
-    timeframes: list[str],
-) -> str:
-    if DIAG_SYMBOL not in symbols or DIAG_TF not in timeframes:
-        return ""
-    frame = get_ohlc(DIAG_SYMBOL, DIAG_TF)
-    exit_model = cfg.exit_models[0]
+    exit_model: str,
+) -> tuple[dict[str, Any], list[str]]:
+    frame = get_ohlc(DIAG_SYMBOL, tf)
     sub = trades[
         (trades["symbol"] == DIAG_SYMBOL)
-        & (trades["timeframe"] == DIAG_TF)
+        & (trades["timeframe"] == tf)
         & (trades["exit_model"] == exit_model)
         & trades["filled"]
         & (trades.get("skip_reason", "") != "position_busy")
     ]
-    sig = signals[(signals["symbol"] == DIAG_SYMBOL) & (signals["timeframe"] == DIAG_TF)]
+    sig = signals[(signals["symbol"] == DIAG_SYMBOL) & (signals["timeframe"] == tf)]
     merged = _merge_trades_signals(sub, sig)
-    lines: list[str] = ["\n=== Diagnostics (BTCUSDT 15m) ==="]
+    lines: list[str] = [f"\n### BTCUSDT {tf}"]
     payload: dict[str, Any] = {}
+    ct_col = "signal_close_time"
 
     for sample in ("IS", "OOS"):
         blk = merged[merged["sample"] == sample] if "sample" in merged.columns else merged
         if blk.empty:
             continue
+        prefix = f"{tf}_{sample}"
         lines.append(f"\n--- {sample} ---")
         gv = _gross_vs_net(blk)
         lines.append(f"Gross vs net: {gv}")
-        payload[f"{sample}_gross_vs_net"] = gv
+        payload[f"{prefix}_gross_vs_net"] = gv
 
         sl = _sl_diagnostics(blk, frame)
         lines.append(f"SL / cost buckets: {sl}")
-        payload[f"{sample}_sl"] = sl
+        payload[f"{prefix}_sl"] = sl
 
         mfe = _mfe_mae_block(blk, frame, cfg)
         lines.append(f"MFE/MAE: {mfe}")
-        payload[f"{sample}_mfe_mae"] = mfe
+        payload[f"{prefix}_mfe_mae"] = mfe
 
         blk = blk.copy()
         blk["hour_pkt"] = [
-            pd.to_datetime(int(t), unit="ms", utc=True).astimezone(PK).hour for t in blk["close_time"]
+            pd.to_datetime(int(t), unit="ms", utc=True).astimezone(PK).hour for t in blk[ct_col]
         ]
         blk["weekday"] = [
-            pd.to_datetime(int(t), unit="ms", utc=True).astimezone(PK).weekday() for t in blk["close_time"]
+            pd.to_datetime(int(t), unit="ms", utc=True).astimezone(PK).weekday() for t in blk[ct_col]
         ]
+        for base in ("strategy", "direction", "entry_type", "score"):
+            if base not in blk.columns:
+                for suffix in ("_sig", "_tr"):
+                    c = f"{base}{suffix}"
+                    if c in blk.columns:
+                        blk[base] = blk[c]
+                        break
         blk["score_bucket"] = pd.cut(blk["score"], bins=[55, 65, 75, 85, 100], right=False)
         ind = ensure_indicators(frame.df)
         bi = blk["bar_index"].astype(int).clip(0, len(ind) - 1)
         blk["atr_pct"] = [100 * float(ind.iloc[i].get("atr_14", 0)) / float(ind.iloc[i]["close"]) for i in bi]
         blk["atr_quintile"] = pd.qcut(blk["atr_pct"].rank(method="first"), 5, duplicates="drop")
-        blk["btc_regime"] = _btc_regime_series(DIAG_SYMBOL, blk["close_time"].to_numpy())
+        blk["btc_regime"] = _btc_regime_series(DIAG_SYMBOL, blk[ct_col].to_numpy(dtype=np.int64))
+        n_unk = int((blk["btc_regime"] == "unknown").sum())
+        lines.append(f"btc_regime unknown: {n_unk}/{len(blk)} ({100*n_unk/len(blk):.1f}%)")
         for col in (
             "strategy",
             "direction",
@@ -414,18 +459,41 @@ def run_diagnostics(
             if not tbl.empty:
                 lines.append(f"\nBreakdown by {col} ({sample}):")
                 lines.append(tbl.head(20).to_string(index=False))
-                payload[f"{sample}_breakdown_{col}"] = tbl.to_dict(orient="records")
+                payload[f"{prefix}_breakdown_{col}"] = tbl.to_dict(orient="records")
 
         wif = _whatif_grid(blk, frame, cfg, sample)
         if not wif.empty:
             lines.append(f"\nWhat-if exits ({sample}):")
             lines.append(wif.to_string(index=False))
-            payload[f"{sample}_whatif"] = wif.to_dict(orient="records")
+            payload[f"{prefix}_whatif"] = wif.to_dict(orient="records")
 
         fees = _fee_scenarios(blk, cfg)
         lines.append(f"\nFee scenarios ({sample}):")
         lines.append(fees.to_string(index=False))
-        payload[f"{sample}_fees"] = fees.to_dict(orient="records")
+        payload[f"{prefix}_fees"] = fees.to_dict(orient="records")
+    return payload, lines
+
+
+def run_diagnostics(
+    run_dir: Path,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    cfg: BacktestConfig,
+    symbols: list[str],
+    timeframes: list[str],
+) -> str:
+    if DIAG_SYMBOL not in symbols:
+        return ""
+    _d1_regime_cache.clear()
+    exit_model = cfg.exit_models[0]
+    payload: dict[str, Any] = {}
+    lines: list[str] = ["\n=== Diagnostics (BTCUSDT) ==="]
+    for tf in DIAG_TFS:
+        if tf not in timeframes:
+            continue
+        part, part_lines = _diagnose_timeframe(tf, signals, trades, cfg, exit_model)
+        payload.update(part)
+        lines.extend(part_lines)
 
     (run_dir / "diagnostics.json").write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     text = "\n".join(lines)

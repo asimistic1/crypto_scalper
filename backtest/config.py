@@ -24,9 +24,9 @@ class BacktestConfig:
     random_seed: int = 42
     min_setup_score: float = 55.0
     ltf_timeframes: tuple[str, ...] = ("5m", "15m", "1h")
-    # Low-fee venue (e.g. MEXC) — update when fee schedule is confirmed
-    low_fee_taker: float = 0.0002
-    low_fee_maker: float = 0.0
+    # MEXC USDT-M standard tier (0.01% maker / 0.04% taker) — see mexc.com/fee
+    low_fee_maker: float = 0.0001
+    low_fee_taker: float = 0.0004
 
     def to_json(self) -> dict:
         return asdict(self)

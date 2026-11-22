@@ -22,10 +22,11 @@ from backtest.dataset import build_dataset
 from backtest.diagnostics import run_diagnostics
 from backtest.history_cache import clear_ohlc_cache, get_ohlc
 from backtest.metrics import core_metrics, monte_carlo_max_dd, score_calibration, spearman_score_r
-from backtest.paths import DATASET_PATH, RUNS_DIR
+from backtest.paths import DATASET_PATH, REPO_ROOT, RUNS_DIR
 from backtest.position import _sort_signals, busy_until_bar, exit_bar_from_close_time
 from backtest.random_baseline import random_baseline_stats
 from backtest.reporting import collect_alarms, print_slice_table, write_summary
+from backtest.reports_export import export_reports
 from backtest.run_lock import acquire_run_lock
 from backtest.signals import generate_signals, signal_meta_path
 from backtest.simulator import SimSignal, simulate_trade, tp1_before_sl_on_path, trade_to_dict
@@ -290,6 +291,11 @@ def _run_backtest_body(
     diag_text = run_diagnostics(run_dir, signals, trades, cfg, symbols, timeframes)
     text = print_slice_table(summary, cal_oos_by_model) + "\n" + diag_text
     write_summary(run_dir, summary, text)
+    console_out = run_dir / "run_console.txt"
+    console_out.write_text(text, encoding="utf-8")
+    legacy = REPO_ROOT / "data" / "backtest" / "phase34_run_console.txt"
+    legacy.write_text(text, encoding="utf-8")
+    export_reports(run_dir, console_out)
     print(f"\nSimulation: {sim_sec:.1f}s | Signal load/scan: {signal_sec:.1f}s")
     print(f"Backtest complete — {run_dir}")
     return run_dir

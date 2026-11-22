@@ -18,6 +18,7 @@ from core.rate_limit import BinanceCooldownActive, banner_message, is_in_cooldow
 from core.symbol_ranking import display_to_rest
 from core.weight_budget import weight_used_this_minute
 from ui.chart_analysis import render_chart_analysis
+from ui.planner import apply_price_pick, render_trade_planner
 
 ANALYZE_DEBOUNCE_SECONDS = 3
 
@@ -154,6 +155,9 @@ def _handle_chart_event(event: dict | None) -> str | None:
             update_signal_status(setup_id, str(status))
             st.session_state["last_chart_status"] = str(status)
         return None
+    if kind == "price_pick":
+        apply_price_pick(event, st.session_state["display_symbol"])
+        return None
     if kind == "candle_closed":
         cm = int(event.get("close_ms") or 0)
         if cm <= 0:
@@ -223,6 +227,20 @@ with st.sidebar:
         "show_patterns": st.checkbox("Show detected patterns", False),
     }
 
+    with st.expander("Price alerts"):
+        from core.alerts import create_alert, list_active
+
+        alert_price = st.number_input("Alert price", min_value=0.0, format="%.8f")
+        alert_kind = st.selectbox("Type", ["cross_above", "cross_below", "in_zone"])
+        if st.button("Create alert"):
+            try:
+                rest = display_to_rest(st.session_state["display_symbol"])
+                create_alert(rest, alert_kind, alert_price)
+                st.success("Alert saved (evaluated on live price updates).")
+            except ValueError as exc:
+                st.error(str(exc))
+        st.caption("Active: " + str(len(list_active(display_to_rest(st.session_state["display_symbol"])))))
+
     if st.button("Analyze", use_container_width=True, type="primary"):
         if _debounce_ok():
             st.session_state["analyze_requested"] = True
@@ -260,6 +278,27 @@ def _chart_and_setup_panel_body() -> None:
         except Exception:
             fb_df = None
 
+    planner_lines = []
+    pe = st.session_state.get("plan_entry", 0) or 0
+    ps = st.session_state.get("plan_sl", 0) or 0
+    if pe > 0:
+        planner_lines.append({"price": pe, "title": "Plan entry", "color": "#2962FF"})
+    if ps > 0:
+        planner_lines.append({"price": ps, "title": "Plan SL", "color": "#F6465D"})
+    for key, title in (("plan_tp1", "TP1"), ("plan_tp2", "TP2"), ("plan_tp3", "TP3")):
+        v = float(st.session_state.get(key, 0) or 0)
+        if v > 0:
+            planner_lines.append({"price": v, "title": title, "color": "#0ECB81"})
+
+    click_pick = st.session_state.get("click_pick_field") or ""
+    analysis = st.session_state.get("chart_analysis")
+    zone_px = tuple()
+    if analysis:
+        zone_px = tuple(
+            z.near_edge for z in (analysis.nearest_support + analysis.nearest_resistance)
+        )
+    atr = float(analysis.atr_pct * analysis.close / 100.0) if analysis and analysis.close else None
+
     with chart_col:
         chart_event = render_live_chart(
             display_symbol,
@@ -271,6 +310,8 @@ def _chart_and_setup_panel_body() -> None:
             streaming_enabled=live_stream,
             tick_size=float(tick_size(rest)),
             toggles=toggles,
+            click_pick=click_pick,
+            planner_overlays=planner_lines,
         )
         if isinstance(chart_event, dict):
             st.session_state["last_chart_event"] = chart_event
@@ -279,11 +320,12 @@ def _chart_and_setup_panel_body() -> None:
     _maybe_analyze(toggles, trigger)
     with setup_col:
         st.subheader("Chart Analysis")
-        analysis = st.session_state.get("chart_analysis")
         if analysis:
             render_chart_analysis(analysis, price_precision=price_precision(rest))
         else:
             st.info("Analyzing…")
+        st.divider()
+        render_trade_planner(display_symbol, atr=atr, zone_prices=zone_px)
 
     with st.expander("Diagnostics", expanded=False):
         diag = st.session_state.get("analysis_diag")
@@ -352,6 +394,10 @@ def live_dashboard() -> None:
 st.navigation(
     [
         st.Page(live_dashboard, title="Live", icon="📈", default=True),
+        st.Page("pages/3_Journal.py", title="Journal", icon="📓"),
+        st.Page("pages/4_Watchlist.py", title="Watchlist", icon="👁"),
+        st.Page("pages/5_Test_Idea.py", title="Test idea", icon="🧪"),
+        st.Page("pages/6_Settings.py", title="Settings", icon="⚙️"),
         st.Page("pages/2_Backtest.py", title="Backtest", icon="📊"),
     ]
 ).run()

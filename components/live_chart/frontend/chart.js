@@ -44,6 +44,7 @@
   let setupStatus = "ACTIVE";
   let lastEventNonce = "";
   let lastClosedCandleTime = null;
+  let clickPickMode = "";
 
   const {
     createChart,
@@ -309,6 +310,21 @@
     const zones = ov.zones || [];
     const markers = ov.markers || [];
     const setup = ov.setup;
+    const plannerLines = ov.planner_lines || [];
+
+    plannerLines.forEach((pl) => {
+      const price = +pl.price;
+      if (!Number.isFinite(price)) return;
+      priceLineHandles.push(
+        candleSeries.createPriceLine({
+          price: price,
+          color: pl.color || "#E0A800",
+          lineWidth: pl.width || 1,
+          lineStyle: pl.style || 2,
+          title: pl.title || "",
+        })
+      );
+    });
 
     if (toggles.setup_lines !== false && setup) {
       setupState = setup;
@@ -653,6 +669,23 @@
       lineWidth: 0,
       priceLineVisible: false,
       lastValueVisible: false,
+    });
+
+    chart.subscribeClick((param) => {
+      const mode = clickPickMode || (renderArgs.click_pick || "");
+      if (!mode || !param.point) return;
+      const price = candleSeries.coordinateToPrice(param.point.y);
+      if (price == null || !Number.isFinite(price)) return;
+      const nonce = Date.now().toString() + "-" + Math.random().toString(16).slice(2);
+      lastEventNonce = nonce;
+      setComponentValue({
+        event: "price_pick",
+        field: mode,
+        price: price,
+        symbol: currentSymbol,
+        timeframe: currentTf,
+        nonce: nonce,
+      });
     });
 
     chart.subscribeCrosshairMove((param) => {
@@ -1017,6 +1050,7 @@
 
     const sym = args.symbol || "";
     const tf = args.timeframe || "15m";
+    clickPickMode = args.click_pick || "";
     const sig = overlaySig(args);
     const marketChanged = sym !== currentSymbol || tf !== currentTf;
 

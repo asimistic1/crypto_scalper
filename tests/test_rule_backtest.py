@@ -5,9 +5,17 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+import pytest
+
 from backtest.config import BacktestConfig
 from backtest.history import ensure_indicators, load_history
+from backtest.paths import history_parquet
 from research.rule_backtest import rule_summary, run_rule_backtest, thresholds_from_is
+
+pytestmark = pytest.mark.skipif(
+    not history_parquet("BTCUSDT", "1h").exists(),
+    reason="missing BTCUSDT 1h history parquet",
+)
 
 
 def _synthetic_panel(n: int = 400, seed: int = 0) -> pd.DataFrame:

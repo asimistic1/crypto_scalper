@@ -120,6 +120,9 @@ def render_trade_planner(symbol_display: str, *, atr: float | None, zone_prices:
     plan = build_plan(inp)
     pos = plan["position"]
     st.metric("Position", f"{pos['coins']} coins", f"~{pos['notional_usdt']:.2f} USDT")
+    st.caption(f"Loss if SL hit (incl. fees): **{pos.get('loss_if_sl_usdt', 0):.2f} USDT**")
+    for t in plan["targets"]:
+        st.caption(f"{t['tp']}: profit ~**{t.get('profit_usdt', 0):.2f} USDT** (net {t['net_r']:.2f}R)")
     if pos.get("below_min_notional"):
         st.error("Below min notional for this symbol.")
     st.write(f"Margin ~**{plan['margin_usdt']:.2f} USDT** · liq (approx) **{plan.get('liquidation_approx')}**")

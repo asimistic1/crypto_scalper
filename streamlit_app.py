@@ -141,11 +141,20 @@ def _handle_chart_event(event: dict | None) -> str | None:
     nonce = str(event.get("nonce", ""))
     if nonce and nonce == st.session_state.get("last_event_nonce"):
         return None
+    kind = event.get("event")
+    if kind == "alert_fired":
+        if nonce and nonce == st.session_state.get("last_event_nonce"):
+            return None
+        st.session_state["last_event_nonce"] = nonce
+        from core.alerts import mark_triggered
+
+        mark_triggered(int(event.get("alert_id", 0)), float(event.get("price", 0)))
+        st.toast(event.get("message", "Alert triggered"))
+        return None
     rest = display_to_rest(st.session_state["display_symbol"])
     if event.get("symbol") != rest or event.get("timeframe") != st.session_state["timeframe"]:
         return None
     st.session_state["last_event_nonce"] = nonce
-    kind = event.get("event")
     if kind == "status_changed":
         setup_id = event.get("setup_id")
         status = event.get("status")
@@ -299,6 +308,8 @@ def _chart_and_setup_panel_body() -> None:
         )
     atr = float(analysis.atr_pct * analysis.close / 100.0) if analysis and analysis.close else None
 
+    from core.alerts import alerts_for_chart
+
     with chart_col:
         chart_event = render_live_chart(
             display_symbol,
@@ -312,6 +323,7 @@ def _chart_and_setup_panel_body() -> None:
             toggles=toggles,
             click_pick=click_pick,
             planner_overlays=planner_lines,
+            alerts=alerts_for_chart(rest),
         )
         if isinstance(chart_event, dict):
             st.session_state["last_chart_event"] = chart_event

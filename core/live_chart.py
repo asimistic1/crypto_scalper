@@ -88,6 +88,7 @@ def render_live_chart(
     toggles: dict[str, bool] | None = None,
     click_pick: str | None = None,
     planner_overlays: list[dict[str, Any]] | None = None,
+    alerts: list[dict[str, Any]] | None = None,
 ) -> Any:
     """
     Render the chart component (constant key — WS stays connected).
@@ -120,6 +121,7 @@ def render_live_chart(
         },
         toggles=default_toggles,
         click_pick=click_pick or "",
+        alerts=alerts or [],
         theme="dark",
         key=_COMPONENT_KEY,
         default=None,

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from core.auth_gate import require_auth
+from core.mini_ticker import render_mini_ticker
 from core.settings_store import load_settings
 from core.symbol_ranking import fetch_top_symbols_by_volume
 from core.watchlist_service import build_watch_row
@@ -18,46 +18,29 @@ st.title("Watchlist")
 st.caption("Information only — not trade signals.")
 
 settings = load_settings()
-coins = settings.get("watchlist") or []
+coins = [str(s).upper() for s in (settings.get("watchlist") or [])]
 if not coins:
     try:
         syms, _ = fetch_top_symbols_by_volume(15)
-        coins = [s.replace("/", "") + ("" if "USDT" in s else "") for s in syms]
-        coins = [c if c.endswith("USDT") else c + "USDT" for c in [s.replace("/", "") for s in syms]]
+        coins = [s.replace("/", "").upper() if s.endswith("USDT") else s.replace("/", "") + "USDT" for s in syms]
     except Exception:
         coins = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 filter_mode = st.selectbox("Filter", ["All", "Near zone (<0.5 ATR)", "All TF aligned", "High vol (ATR%)"])
 
-components.html(
-    """
-<script>
-(function(){
-  if (window.__watchWs) return;
-  const ws = new WebSocket('wss://fstream.binance.com/market/stream?streams=!miniTicker@arr');
-  window.__watchWs = ws;
-  const prices = {};
-  ws.onmessage = (ev) => {
-    try {
-      const msg = JSON.parse(ev.data);
-      const arr = msg.data;
-      if (!Array.isArray(arr)) return;
-      arr.forEach((t) => {
-        if (t.s && t.s.endsWith('USDT')) prices[t.s] = {c: +t.c, P: +t.P};
-      });
-      window.parent.postMessage({type: 'watch_prices', prices}, '*');
-    } catch(e) {}
-  };
-})();
-</script>
-""",
-    height=0,
-)
+live_event = render_mini_ticker(coins)
+live_prices: dict = {}
+if isinstance(live_event, dict) and live_event.get("event") == "watch_prices":
+    live_prices = live_event.get("prices") or {}
 
 rows = []
 for sym in coins[:30]:
     wr = build_watch_row(sym)
     if wr:
+        live = live_prices.get(sym)
+        if live:
+            wr.price = float(live.get("c", wr.price))
+            wr.change_24h_pct = float(live.get("P", wr.change_24h_pct))
         rows.append(wr)
 
 if filter_mode == "Near zone (<0.5 ATR)":
@@ -70,7 +53,7 @@ elif filter_mode == "High vol (ATR%)":
 table = [
     {
         "Coin": r.display,
-        "Price": r.price,
+        "Live price": r.price,
         "24h %": round(r.change_24h_pct, 2),
         "15m": r.trend_15m,
         "1h": r.trend_1h,
@@ -83,5 +66,8 @@ table = [
     for r in rows
 ]
 st.dataframe(table, use_container_width=True)
-if st.button("Open BTC on Live"):
+if live_prices:
+    st.caption(f"Live prices: **{len(live_prices)}** symbols via Binance `!miniTicker@arr` (browser WebSocket).")
+
+if st.button("Open Live chart"):
     st.switch_page("streamlit_app.py")

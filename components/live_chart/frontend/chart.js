@@ -45,6 +45,76 @@
   let lastEventNonce = "";
   let lastClosedCandleTime = null;
   let clickPickMode = "";
+  let lastAlertPrice = null;
+  const alertCooldown = {};
+  let notifAsked = false;
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.frequency.value = 880;
+      g.gain.value = 0.08;
+      o.start();
+      setTimeout(() => o.stop(), 120);
+    } catch (_) {}
+  }
+
+  function ensureNotif() {
+    if (notifAsked || !window.Notification) return;
+    notifAsked = true;
+    if (Notification.permission === "default") Notification.requestPermission();
+  }
+
+  function fireAlert(alert, price) {
+    const msg = alert.type + " " + fmtPrice(alert.price) + " (now " + fmtPrice(price) + ")";
+    if (window.Notification && Notification.permission === "granted") {
+      new Notification(currentSymbol + " price alert", { body: msg });
+    }
+    beep();
+    const nonce = Date.now().toString() + "-a";
+    lastEventNonce = nonce;
+    setComponentValue({
+      event: "alert_fired",
+      alert_id: alert.id,
+      price: price,
+      message: msg,
+      symbol: currentSymbol,
+      nonce: nonce,
+    });
+  }
+
+  function evalPriceAlerts(price) {
+    if (!Number.isFinite(price)) return;
+    ensureNotif();
+    const alerts = renderArgs.alerts || [];
+    if (!alerts.length) {
+      lastAlertPrice = price;
+      return;
+    }
+    const now = Date.now();
+    for (let i = 0; i < alerts.length; i++) {
+      const a = alerts[i];
+      const id = a.id;
+      if (alertCooldown[id] && now - alertCooldown[id] < 5000) continue;
+      let hit = false;
+      if (a.type === "cross_above" && lastAlertPrice != null) {
+        hit = lastAlertPrice < a.price && price >= a.price;
+      } else if (a.type === "cross_below" && lastAlertPrice != null) {
+        hit = lastAlertPrice > a.price && price <= a.price;
+      } else if (a.type === "in_zone" && a.zone_low != null && a.zone_high != null) {
+        hit = price >= a.zone_low && price <= a.zone_high;
+      }
+      if (hit) {
+        fireAlert(a, price);
+        alertCooldown[id] = now;
+      }
+    }
+    lastAlertPrice = price;
+  }
 
   const {
     createChart,
@@ -131,6 +201,7 @@
       const p = pendingPrice;
       pendingPrice = null;
       if (p != null) {
+        evalPriceAlerts(p);
         flashPrice(p);
         updatePriceLine(p);
         updateSetupLifecycle(p);
@@ -1055,6 +1126,7 @@
     const marketChanged = sym !== currentSymbol || tf !== currentTf;
 
     if (marketChanged) {
+      lastAlertPrice = null;
       overlaySignature = sig;
       onSymbolTfChange(args);
       return;

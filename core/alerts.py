@@ -84,6 +84,40 @@ def create_alert(symbol: str, alert_type: str, price: float, **zone) -> int:
         return int(cur.lastrowid)
 
 
+def alerts_for_chart(symbol: str) -> list[dict]:
+    """Serializable payload for browser-side evaluation."""
+    return [
+        {
+            "id": int(a["id"]),
+            "type": a["alert_type"],
+            "price": float(a["price"]),
+            "zone_low": a.get("zone_low"),
+            "zone_high": a.get("zone_high"),
+        }
+        for a in list_active(symbol)
+    ]
+
+
+def mark_triggered(alert_id: int, price: float) -> None:
+    """Sync DB after browser fired an alert (idempotent)."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id, symbol, alert_type, price FROM alerts WHERE id=? AND active=1",
+            (alert_id,),
+        ).fetchone()
+        if not row:
+            return
+        msg = f"{row[2]} @ {price:.6g} (target {row[3]})"
+        conn.execute(
+            "UPDATE alerts SET active=0, triggered_at=? WHERE id=?",
+            (datetime.now(UTC).isoformat(), alert_id),
+        )
+        conn.execute(
+            "INSERT INTO alert_history(alert_id, message, created_at) VALUES (?,?,?)",
+            (alert_id, msg, datetime.now(UTC).isoformat()),
+        )
+
+
 def list_active(symbol: str | None = None) -> list[dict]:
     with _conn() as conn:
         if symbol:

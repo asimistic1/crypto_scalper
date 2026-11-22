@@ -18,6 +18,19 @@ def test_alert_evaluate(alerts_db):
     assert A.active_count() == 0
 
 
+def test_mark_triggered_idempotent(alerts_db):
+    aid = A.create_alert("BTCUSDT", "cross_above", 50.0)
+    A.mark_triggered(aid, 51.0)
+    assert A.active_count() == 0
+    A.mark_triggered(aid, 52.0)
+
+
+def test_alerts_for_chart(alerts_db):
+    A.create_alert("BTCUSDT", "cross_below", 90.0)
+    payload = A.alerts_for_chart("BTCUSDT")
+    assert payload and payload[0]["type"] == "cross_below"
+
+
 def test_alert_limit(alerts_db):
     for i in range(A.MAX_ALERTS):
         A.create_alert("ETHUSDT", "cross_below", float(i + 1))

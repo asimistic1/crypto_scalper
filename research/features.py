@@ -10,6 +10,24 @@ from backtest.history import ensure_indicators, load_history
 from backtest.paths import SIGNALS_DIR, symbol_aux_parquet
 from research.aux_data import load_funding, load_metrics_5m, merge_asof_features
 
+
+def _sanitize_oi_levels(met: pd.DataFrame) -> pd.DataFrame:
+    out = met.copy()
+    for col in ("open_interest", "open_interest_value"):
+        if col in out.columns:
+            v = pd.to_numeric(out[col], errors="coerce")
+            out.loc[v.isna() | (v <= 0), col] = np.nan
+    return out
+
+
+def _safe_pct_change_n(s: pd.Series, periods: int = 1) -> pd.Series:
+    prev = s.shift(periods)
+    valid = prev.notna() & (prev > 0) & s.notna() & (s > 0)
+    out = pd.Series(np.nan, index=s.index, dtype=float)
+    out.loc[valid] = s.loc[valid] / prev.loc[valid] - 1.0
+    return out
+
+
 DERIVATIVES_FEATURES = frozenset(
     {
         "open_interest",
@@ -136,7 +154,7 @@ def build_feature_table(
             base["funding_extreme_hi"] = float("nan")
             base["funding_extreme_lo"] = float("nan")
 
-    met = load_metrics_5m(sym)
+    met = _sanitize_oi_levels(load_metrics_5m(sym))
     if not met.empty:
         cols = [
             c
@@ -150,11 +168,17 @@ def build_feature_table(
             if c in met.columns
         ]
         base = _asof_numeric(base, met, cols)
-        oi = base["open_interest"].astype(float)
+        if "open_interest" in base.columns:
+            oi = pd.to_numeric(base["open_interest"], errors="coerce")
+            base.loc[oi.isna() | (oi <= 0), "open_interest"] = np.nan
+        if "open_interest_value" in base.columns:
+            ov = pd.to_numeric(base["open_interest_value"], errors="coerce")
+            base.loc[ov.isna() | (ov <= 0), "open_interest_value"] = np.nan
+        oi = base["open_interest"] if "open_interest" in base.columns else pd.Series(np.nan, index=base.index)
         px = base["close"].astype(float)
-        base["oi_chg_1h"] = oi.pct_change(1)
-        base["oi_chg_4h"] = oi.pct_change(4)
-        base["oi_chg_24h"] = oi.pct_change(24)
+        base["oi_chg_1h"] = _safe_pct_change_n(oi, 1)
+        base["oi_chg_4h"] = _safe_pct_change_n(oi, 4)
+        base["oi_chg_24h"] = _safe_pct_change_n(oi, 24)
         px_chg = px.pct_change(1)
         base["price_up_oi_up"] = ((px_chg > 0) & (base["oi_chg_1h"] > 0)).astype(float)
         base["price_up_oi_down"] = ((px_chg > 0) & (base["oi_chg_1h"] < 0)).astype(float)

@@ -1,4 +1,4 @@
-"""Feature coverage report — must PASS before IC tests (Phase 3.5b)."""
+"""Feature coverage report — must PASS before IC tests (Phase 3.5c)."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def run_coverage(symbols: list[str]) -> tuple[pd.DataFrame, list[str]]:
 
 def table_markdown(df: pd.DataFrame) -> str:
     lines = [
-        "# Phase 3.5b — Feature coverage",
+        "# Phase 3.5c — Feature coverage",
         "",
         f"PASS thresholds: ≥{MIN_NON_NULL:.0%} non-null, ≥{MIN_UNIQUE} unique values (IS).",
         "",
@@ -115,7 +115,7 @@ def main() -> None:
     args = p.parse_args()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     table, fails = run_coverage(symbols)
-    path = REPORTS_DIR / "phase35b_coverage.md"
+    path = REPORTS_DIR / "phase35c_coverage.md"
     path.write_text(table_markdown(table), encoding="utf-8")
     print(table_markdown(table)[:2000])
     print(f"\nWrote {path}")

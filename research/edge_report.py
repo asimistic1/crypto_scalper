@@ -1,4 +1,4 @@
-"""Phase 3.5b — predictive tests with clean IS→OOS protocol."""
+"""Phase 3.5c — predictive tests with clean IS→OOS protocol."""
 
 from __future__ import annotations
 
@@ -20,11 +20,14 @@ from research.coverage import run_coverage
 from research.coverage import table_markdown as coverage_md
 from research.features import build_feature_table, feature_columns
 from research.rule_backtest import rule_summary, run_rule_backtest, thresholds_from_is
+from research.selection_rules import SELECTION_RULE_MD, is_selection_eligible
 from research.targets import add_forward_targets
 
 REPORTS_DIR = REPO_ROOT / "reports"
+PHASE_TAG = "35c"
 IC_TSTAT_MIN = 3.0
 SIGN_MONTHS_MIN = 0.70
+MIN_OOS_TRADES = 100
 HORIZONS = (1, 4, 12, 24)
 TARGET_SUFFIX = "fwd_net_low"
 OOS_ALREADY_SEEN = re.compile(r"(taker_|above_ema|realized_vol|atr_pct|weekday|setup_score|has_)", re.I)
@@ -94,10 +97,10 @@ def run_ic_table(df: pd.DataFrame, features: list[str], n_tested: int) -> pd.Dat
     return pd.DataFrame(rows)
 
 
-def _df_to_md(table: pd.DataFrame, max_rows: int = 80) -> str:
+def _df_to_md(table: pd.DataFrame, max_rows: int | None = 80) -> str:
     if table.empty:
         return "_empty_"
-    sub = table.head(max_rows)
+    sub = table if max_rows is None else table.head(max_rows)
     cols = list(sub.columns)
     lines = ["| " + " | ".join(cols) + " |", "| " + " | ".join("---" for _ in cols) + " |"]
     for _, row in sub.iterrows():
@@ -115,8 +118,8 @@ def _df_to_md(table: pd.DataFrame, max_rows: int = 80) -> str:
 def selection_paths(symbol: str) -> tuple[Path, Path]:
     sym = symbol.upper()
     return (
-        REPORTS_DIR / f"phase35b_{sym}_is_selection.md",
-        REPORTS_DIR / f"phase35b_{sym}_is_selection.json",
+        REPORTS_DIR / f"phase{PHASE_TAG}_{sym}_is_selection.md",
+        REPORTS_DIR / f"phase{PHASE_TAG}_{sym}_is_selection.json",
     )
 
 
@@ -145,6 +148,8 @@ def pick_qualified(ic_is: pd.DataFrame, is_df: pd.DataFrame, symbol: str, cfg: B
         if len(picks) >= 5:
             break
         feat = str(row["feature"])
+        if not is_selection_eligible(feat):
+            continue
         if feat in seen:
             continue
         if abs(float(row["ic_tstat"])) < IC_TSTAT_MIN:
@@ -182,10 +187,12 @@ def write_is_selection(symbol: str, picks: list[dict]) -> None:
     if not picks:
         body = "\n".join(
             [
-                f"# Phase 3.5b IS selection — {symbol}",
+                f"# Phase 3.5c IS selection — {symbol}",
                 "",
                 f"timestamp: {datetime.now(tz=UTC).isoformat()}",
                 f"commit: `{_git_hash()}`",
+                "",
+                SELECTION_RULE_MD,
                 "",
                 "## NO FEATURE QUALIFIES",
                 "",
@@ -194,10 +201,12 @@ def write_is_selection(symbol: str, picks: list[dict]) -> None:
     else:
         body = "\n".join(
             [
-                f"# Phase 3.5b IS selection — {symbol}",
+                f"# Phase 3.5c IS selection — {symbol}",
                 "",
                 f"timestamp: {datetime.now(tz=UTC).isoformat()}",
                 f"commit: `{_git_hash()}`",
+                "",
+                SELECTION_RULE_MD,
                 "",
                 "| feature | horizon | IC t | sign months | IS net E% (low fee) | trades | note |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -219,9 +228,15 @@ def write_is_selection(symbol: str, picks: list[dict]) -> None:
     )
 
 
+def _oos_trade_count(picks: list[dict], oos_rule: dict[str, dict]) -> int:
+    return sum(int(oos_rule.get(p["feature"], {}).get("low_fee", {}).get("trades", 0) or 0) for p in picks)
+
+
 def symbol_verdict(picks: list[dict], oos_rule: dict[str, dict]) -> str:
     if not picks:
         return "noise"
+    if _oos_trade_count(picks, oos_rule) < MIN_OOS_TRADES:
+        return "insufficient OOS trades"
     pos = [p for p in picks if oos_rule.get(p["feature"], {}).get("net_e_pct", -1) > 0]
     if len(pos) >= 2:
         return "tradeable edge after costs"
@@ -282,9 +297,11 @@ def run_oos(symbol: str, cfg: BacktestConfig) -> dict[str, Any]:
 
 def build_final_report(coverage_table: pd.DataFrame, is_results: list[dict], oos_results: list[dict] | None) -> str:
     lines = [
-        "# Phase 3.5b — Edge research",
+        "# Phase 3.5c — Edge research",
         "",
         f"_Generated {datetime.now(tz=UTC).isoformat()} | commit `{_git_hash()}`_",
+        "",
+        SELECTION_RULE_MD,
         "",
         "## Coverage summary",
         "",
@@ -295,7 +312,7 @@ def build_final_report(coverage_table: pd.DataFrame, is_results: list[dict], oos
         sym = block["symbol"]
         lines.append(f"## {sym} — IS (all features)")
         lines.append("")
-        lines.append(_df_to_md(block["ic_is"], 60))
+        lines.append(_df_to_md(block["ic_is"], None))
         lines.append("")
     if oos_results:
         lines.append("## OOS confirmation")
@@ -327,7 +344,7 @@ def build_final_report(coverage_table: pd.DataFrame, is_results: list[dict], oos
 def run_pipeline(symbols: list[str], phase: str) -> None:
     cfg = BacktestConfig()
     cov_table, cov_fails = run_coverage(symbols)
-    (REPORTS_DIR / "phase35b_coverage.md").write_text(coverage_md(cov_table), encoding="utf-8")
+    (REPORTS_DIR / f"phase{PHASE_TAG}_coverage.md").write_text(coverage_md(cov_table), encoding="utf-8")
     deriv_fail = [f for f in cov_fails if any(d in f for d in ("funding", "open_interest", "basis", "ls_ratio", "oi_"))]
     if deriv_fail:
         print("WARN derivative coverage failures:", deriv_fail[:10])
@@ -338,10 +355,10 @@ def run_pipeline(symbols: list[str], phase: str) -> None:
     if phase in ("is", "all"):
         for sym in symbols:
             is_results.append(run_is(sym, cfg))
-        print("Wrote per-symbol IS selection under reports/phase35b_*_is_selection.*")
+        print(f"Wrote per-symbol IS selection under reports/phase{PHASE_TAG}_*_is_selection.*")
         if phase == "is":
             sections = build_final_report(cov_table, is_results, None)
-            (REPORTS_DIR / "phase35b_edge_research.md").write_text(sections, encoding="utf-8")
+            (REPORTS_DIR / f"phase{PHASE_TAG}_edge_research.md").write_text(sections, encoding="utf-8")
             return
 
     if phase in ("oos", "all"):
@@ -350,19 +367,19 @@ def run_pipeline(symbols: list[str], phase: str) -> None:
         oos_results = []
         for sym in symbols:
             oos_results.append(run_oos(sym, cfg))
-        oos_md = ["# Phase 3.5b OOS confirmation", "", f"_commit `{_git_hash()}`_", ""]
+        oos_md = ["# Phase 3.5c OOS confirmation", "", f"_commit `{_git_hash()}`_", ""]
         for block in oos_results:
             oos_md.append(f"## {block['symbol']}: **{block['verdict']}**")
             oos_md.append(_df_to_md(block["ic_oos"], 30))
             oos_md.append("")
-        (REPORTS_DIR / "phase35b_oos.md").write_text("\n".join(oos_md), encoding="utf-8")
+        (REPORTS_DIR / f"phase{PHASE_TAG}_oos.md").write_text("\n".join(oos_md), encoding="utf-8")
         report = build_final_report(cov_table, is_results, oos_results)
-        (REPORTS_DIR / "phase35b_edge_research.md").write_text(report, encoding="utf-8")
-        print(f"Wrote {REPORTS_DIR / 'phase35b_edge_research.md'}")
+        (REPORTS_DIR / f"phase{PHASE_TAG}_edge_research.md").write_text(report, encoding="utf-8")
+        print(f"Wrote {REPORTS_DIR / f'phase{PHASE_TAG}_edge_research.md'}")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Phase 3.5b edge research")
+    p = argparse.ArgumentParser(description="Phase 3.5c edge research")
     p.add_argument("--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT")
     p.add_argument("--phase", default="all", choices=("is", "oos", "all"))
     args = p.parse_args()

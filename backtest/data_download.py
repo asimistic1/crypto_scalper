@@ -463,11 +463,50 @@ def run_research_download(symbols: list[str], months: int = 24) -> None:
             logger.info("gaps logged -> %s", gaps_path)
 
 
+def rest_funding_gap_fill(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Append funding rows from Binance REST through now (public, no key)."""
+    if df.empty:
+        return df
+    last_ms = int(pd.Timestamp(df["calc_time"].iloc[-1]).timestamp() * 1000)
+    now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+    if now_ms - last_ms < 3_600_000:
+        return df
+    start_ms = last_ms + 1
+    rows: list[dict] = []
+    while start_ms < now_ms:
+        resp = fapi_get(
+            "/fapi/v1/fundingRate",
+            {"symbol": symbol.upper(), "startTime": start_ms, "limit": 1000},
+        )
+        batch = resp.json()
+        if not batch:
+            break
+        for row in batch:
+            rows.append(
+                {
+                    "calc_time": pd.to_datetime(int(row["fundingTime"]), unit="ms", utc=True),
+                    "last_funding_rate": float(row["fundingRate"]),
+                }
+            )
+        start_ms = int(batch[-1]["fundingTime"]) + 1
+        if len(batch) < 1000:
+            break
+    if not rows:
+        return df
+    extra = pd.DataFrame(rows)
+    out = pd.concat([df, extra], ignore_index=True)
+    out = out.drop_duplicates(subset=["calc_time"], keep="last").sort_values("calc_time")
+    return out
+
+
 def download_funding(symbol: str, months: int) -> Path | None:
     manifest_path = FUNDING_DIR / f"{symbol}.manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"verified_shards": {}}
     end = datetime.now(tz=UTC)
+    path = funding_parquet(symbol)
     frames: list[pd.DataFrame] = []
+    if path.exists():
+        frames.append(pd.read_parquet(path))
     for spec in month_range(end, months):
         key = f"funding:{spec.label()}"
         if manifest.get("verified_shards", {}).get(key):
@@ -485,9 +524,14 @@ def download_funding(symbol: str, months: int) -> Path | None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     if not frames:
+        if path.exists():
+            df = rest_funding_gap_fill(symbol, pd.read_parquet(path))
+            df.to_parquet(path, index=False)
+            return path
         return None
     df = pd.concat(frames, ignore_index=True)
-    path = funding_parquet(symbol)
+    df = df.drop_duplicates(subset=["calc_time"], keep="last").sort_values("calc_time")
+    df = rest_funding_gap_fill(symbol, df)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=False)
     return path

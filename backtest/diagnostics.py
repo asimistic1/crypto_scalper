@@ -32,6 +32,13 @@ DIAG_SYMBOL = "BTCUSDT"
 DIAG_TF = "15m"
 
 
+def _sig_val(row: pd.Series, *keys: str, default: float = 0.0) -> float:
+    for k in keys:
+        if k in row.index and pd.notna(row[k]):
+            return float(row[k])
+    return default
+
+
 def _merge_trades_signals(trades: pd.DataFrame, signals: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "setup_id",
@@ -42,11 +49,16 @@ def _merge_trades_signals(trades: pd.DataFrame, signals: pd.DataFrame) -> pd.Dat
         "entry",
         "stop_loss",
         "tp1",
+        "tp2",
+        "tp3",
         "close_time",
         "score",
     ]
-    sig = signals[cols].drop_duplicates("setup_id")
-    return trades.merge(sig, on="setup_id", how="left", suffixes=("", "_sig"))
+    sig = signals[[c for c in cols if c in signals.columns]].drop_duplicates("setup_id")
+    merged = trades.merge(sig, on="setup_id", how="left", suffixes=("", "_sig"))
+    if "entry_sig" in merged.columns:
+        merged["entry_level"] = merged["entry_sig"].combine_first(merged.get("entry_level", merged.get("entry", 0)))
+    return merged
 
 
 def _fee_floor_risk(entry: float) -> float:
@@ -226,11 +238,11 @@ def _mfe_mae_block(filled: pd.DataFrame, frame, cfg: BacktestConfig) -> dict[str
         sim = SimSignal(
             direction=Direction(str(row["direction"])),
             entry_type=EntryType(str(row["entry_type"])),
-            entry=float(row.get("entry_sig", row["entry_level"])),
-            stop_loss=float(row["stop_loss"]),
-            tp1=float(row.get("tp1", row["entry_level"])),
-            tp2=float(row.get("tp2", row["entry_level"])),
-            tp3=float(row.get("tp3", row["entry_level"])),
+            entry=_sig_val(row, "entry_sig", "entry_level", "entry"),
+            stop_loss=_sig_val(row, "stop_loss"),
+            tp1=_sig_val(row, "tp1_sig", "tp1"),
+            tp2=_sig_val(row, "tp2_sig", "tp2", "tp1_sig", "tp1"),
+            tp3=_sig_val(row, "tp3_sig", "tp3", "tp2_sig", "tp2"),
             signal_bar=int(row.get("bar_index", 0)),
         )
         _, mfe, _, _ = _walk_path_r(df, sim, cfg, frame.timeframe)
@@ -267,11 +279,11 @@ def _whatif_grid(filled: pd.DataFrame, frame, cfg: BacktestConfig, sample: str) 
                     sim = SimSignal(
                         direction=Direction(str(row["direction"])),
                         entry_type=EntryType(str(row["entry_type"])),
-                        entry=float(row.get("entry_sig", row["entry_level"])),
-                        stop_loss=float(row["stop_loss"]),
-                        tp1=float(row["tp1"]),
-                        tp2=float(row["tp2"]),
-                        tp3=float(row["tp3"]),
+                        entry=_sig_val(row, "entry_sig", "entry_level", "entry"),
+                        stop_loss=_sig_val(row, "stop_loss"),
+                        tp1=_sig_val(row, "tp1_sig", "tp1"),
+                        tp2=_sig_val(row, "tp2_sig", "tp2"),
+                        tp3=_sig_val(row, "tp3_sig", "tp3"),
                         signal_bar=int(row["bar_index"]),
                     )
                     g, _, _, _ = _walk_path_r(

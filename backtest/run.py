@@ -19,15 +19,16 @@ import pandas as pd
 
 from backtest.config import BacktestConfig
 from backtest.dataset import build_dataset
+from backtest.diagnostics import run_diagnostics
 from backtest.history_cache import clear_ohlc_cache, get_ohlc
 from backtest.metrics import core_metrics, monte_carlo_max_dd, score_calibration, spearman_score_r
 from backtest.paths import DATASET_PATH, RUNS_DIR
 from backtest.position import _sort_signals, busy_until_bar, exit_bar_from_close_time
-from backtest.random_baseline import random_baseline_percentile
+from backtest.random_baseline import random_baseline_stats
 from backtest.reporting import collect_alarms, print_slice_table, write_summary
 from backtest.run_lock import acquire_run_lock
 from backtest.signals import generate_signals, signal_meta_path
-from backtest.simulator import SimSignal, simulate_trade, trade_to_dict
+from backtest.simulator import SimSignal, simulate_trade, tp1_before_sl_on_path, trade_to_dict
 from backtest.split import tag_sample
 from core.models import Direction, EntryType
 
@@ -106,6 +107,7 @@ def simulate_slice(
     signals: pd.DataFrame,
     cfg: BacktestConfig,
     exit_model: str,
+    tp1_cache: dict[str, bool] | None = None,
 ) -> pd.DataFrame:
     trade_rows: list[dict] = []
     for (_sym, _tf), grp in _sort_signals(signals).groupby(["symbol", "timeframe"], sort=False):
@@ -131,6 +133,13 @@ def simulate_slice(
             d["stop_loss"] = float(r["stop_loss"])
             d["entry_level"] = float(r["entry"])
             d["skip_reason"] = ""
+            if trade.filled and tp1_cache is not None:
+                sid = str(r["setup_id"])
+                if sid not in tp1_cache:
+                    tp1_cache[sid] = tp1_before_sl_on_path(
+                        frame.df, sim, cfg, timeframe=str(_tf)
+                    )
+                d["tp1_before_sl"] = tp1_cache[sid]
             exit_bar = _trade_exit_bar(trade, frame, bi)
             if exit_bar is not None:
                 d["exit_bar"] = exit_bar
@@ -195,9 +204,10 @@ def _run_backtest_body(
 
     clear_ohlc_cache()
     sim_t0 = time.perf_counter()
+    tp1_cache: dict[str, bool] = {}
     trade_parts: list[pd.DataFrame] = []
     for exit_model in cfg.exit_models:
-        part = simulate_slice(signals, cfg, exit_model)
+        part = simulate_slice(signals, cfg, exit_model, tp1_cache=tp1_cache)
         if not part.empty:
             part["exit_model"] = exit_model
             trade_parts.append(part)
@@ -224,7 +234,7 @@ def _run_backtest_body(
         "simulation_sec": sim_sec,
         "by_slice": {},
     }
-    cal_oos_primary: pd.DataFrame | None = None
+    cal_oos_by_model: dict[str, pd.DataFrame] = {}
     for exit_model in cfg.exit_models:
         sub = trades[trades["exit_model"] == exit_model] if not trades.empty else pd.DataFrame()
         for (sym, tf), grp in sub.groupby(["symbol", "timeframe"]):
@@ -249,9 +259,17 @@ def _run_backtest_body(
                     is_pct = float(is_m.get("random_baseline_pct", 50.0))
                     oos_pct = float(oos_m.get("random_baseline_pct", 50.0))
                     m["random_baseline_pct"] = (is_pct * is_n + oos_pct * oos_n) / (is_n + oos_n)
+                    rb_is = is_m.get("random_baseline", {})
+                    rb_oos = oos_m.get("random_baseline", {})
+                    if rb_is or rb_oos:
+                        m["random_baseline"] = {
+                            "weighted_pct": m["random_baseline_pct"],
+                            "is": rb_is,
+                            "oos": rb_oos,
+                        }
                 else:
                     print(f"  MC baseline {slice_key} {sample}…", flush=True)
-                    m["random_baseline_pct"] = random_baseline_percentile(
+                    rb = random_baseline_stats(
                         frame,
                         sym_sigs,
                         g,
@@ -259,16 +277,18 @@ def _run_backtest_body(
                         exit_model,
                         sample=sample,
                     )
+                    m["random_baseline_pct"] = rb["percentile"]
+                    m["random_baseline"] = rb
                 summary["by_slice"][slice_key][sample] = m
             oos = grp[(grp["filled"]) & (grp["sample"] == "OOS")] if "sample" in grp.columns else grp.iloc[0:0]
             cal = score_calibration(oos)
             cal.to_csv(run_dir / f"score_cal_{sym}_{tf}_{exit_model}.csv", index=False)
-            if exit_model == cfg.exit_models[-1] and not cal.empty:
-                cal_oos_primary = cal
+            if not cal.empty:
+                cal_oos_by_model[f"{sym}|{tf}|{exit_model}"] = cal
 
     collect_alarms(summary)
-    cal_oos = cal_oos_primary if cal_oos_primary is not None else pd.DataFrame()
-    text = print_slice_table(summary, cal_oos)
+    diag_text = run_diagnostics(run_dir, signals, trades, cfg, symbols, timeframes)
+    text = print_slice_table(summary, cal_oos_by_model) + "\n" + diag_text
     write_summary(run_dir, summary, text)
     print(f"\nSimulation: {sim_sec:.1f}s | Signal load/scan: {signal_sec:.1f}s")
     print(f"Backtest complete — {run_dir}")

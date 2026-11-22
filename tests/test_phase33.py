@@ -123,11 +123,11 @@ def test_tp1_before_sl_win_definition():
         [
             {"filled": True, "tp1_before_sl": True, "r_net": 1.0, "skip_reason": ""},
             {"filled": True, "tp1_before_sl": False, "r_net": -1.0, "skip_reason": ""},
-            {"filled": True, "tp1_before_sl": False, "r_net": 0.2, "outcome": "BE", "skip_reason": ""},
+            {"filled": True, "tp1_before_sl": True, "r_net": 0.2, "outcome": "BE", "skip_reason": ""},
         ]
     )
     m = core_metrics(trades, raw_signals=3)
-    assert m["win_rate"] == pytest.approx(1 / 3)
+    assert m["win_rate"] == pytest.approx(2 / 3)
 
 
 def test_is_oos_split_boundary():

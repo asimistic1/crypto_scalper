@@ -742,8 +742,7 @@ def _mk(
     fill_bar: int | None = None,
 ) -> SimTrade:
     if tp1_before_sl is None:
-        oc = outcome.value if isinstance(outcome, Outcome) else str(outcome)
-        tp1_before_sl = oc in (Outcome.TP1.value, Outcome.TP2.value, Outcome.TP3.value)
+        tp1_before_sl = False
     return SimTrade(
         symbol=symbol,
         timeframe=timeframe,
@@ -774,3 +773,81 @@ def _mk(
 
 def trade_to_dict(t: SimTrade) -> dict:
     return asdict(t)
+
+
+def resolve_fill_index(
+    df: pd.DataFrame,
+    signal: SimSignal,
+    cfg: BacktestConfig,
+) -> tuple[int, float] | None:
+    """Return (fill_bar_index, fill_price) or None if no fill."""
+    i0 = signal.signal_bar
+    if i0 >= len(df) - 1:
+        return None
+    slip = cfg.slippage
+    taker_all = cfg.fee_model == "conservative"
+    fill_idx = None
+    fill_price = signal.entry
+    if signal.entry_type == EntryType.MARKET:
+        nxt = df.iloc[i0 + 1]
+        return i0 + 1, _apply_slippage(float(nxt["open"]), signal.direction, "entry", slip)
+    deadline = min(len(df) - 1, i0 + SETUP_EXPIRY_CANDLES)
+    for j in range(i0 + 1, deadline + 1):
+        bar = df.iloc[j]
+        if signal.direction == Direction.LONG:
+            if _bar_hit_long(bar, signal.stop_loss, above=False) or _bar_hit_long(bar, signal.tp1, above=True):
+                return None
+            filled = float(bar["low"]) < signal.entry
+        else:
+            if _bar_hit_short(bar, signal.stop_loss, above=True) or _bar_hit_short(bar, signal.tp1, above=False):
+                return None
+            filled = float(bar["high"]) > signal.entry
+        if filled:
+            fill_idx = j
+            maker = not taker_all
+            fill_price = _apply_slippage(signal.entry, signal.direction, "entry", slip if not maker else 0.0)
+            bar = df.iloc[fill_idx]
+            if signal.direction == Direction.LONG and float(bar["low"]) < signal.stop_loss:
+                return None
+            if signal.direction == Direction.SHORT and float(bar["high"]) > signal.stop_loss:
+                return None
+            return fill_idx, fill_price
+    return None
+
+
+def tp1_before_sl_on_path(
+    df: pd.DataFrame,
+    signal: SimSignal,
+    cfg: BacktestConfig,
+    *,
+    timeframe: str,
+) -> bool:
+    """True if TP1 is touched before SL on the conservative bar path (exit-model agnostic)."""
+    fill = resolve_fill_index(df, signal, cfg)
+    if fill is None:
+        return False
+    fill_idx, _ = fill
+    risk = _risk(signal)
+    if risk <= 0:
+        return False
+    sl, tp1 = signal.stop_loss, signal.tp1
+    max_hold = cfg.max_hold_bars.get(timeframe, 32)
+    for k in range(fill_idx, min(len(df), fill_idx + max_hold + 1)):
+        bar = df.iloc[k]
+        if signal.direction == Direction.LONG:
+            if float(bar["open"]) < sl:
+                return False
+            same = _same_bar_sl_first_long(bar, sl, tp1)
+            if same == Outcome.SL.value:
+                return False
+            if same == Outcome.TP1.value:
+                return True
+        else:
+            if float(bar["open"]) > sl:
+                return False
+            same = _same_bar_sl_first_short(bar, sl, tp1)
+            if same == Outcome.SL.value:
+                return False
+            if same == Outcome.TP1.value:
+                return True
+    return False
